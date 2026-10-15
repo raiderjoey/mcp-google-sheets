@@ -1,0 +1,15 @@
+{
+  "vault": "/mnt/c/Users/joey/Documents/Joey's Brain",
+  "project_folder": "01_Projects/Google Sheets MCP",
+  "document_types": [
+    "features",
+    "bugs",
+    "test-suites",
+    "notes",
+    "ideas"
+  ],
+  "templates": {},
+  "versions": [
+    "v1.0.0"
+  ]
+}
