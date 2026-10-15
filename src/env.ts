@@ -16,26 +16,25 @@ export interface Env {
   MCP_ALLOWED_HOSTNAMES?: string;
 }
 
+/** Split a comma-separated variable into trimmed, non-empty entries. */
+function parseList(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
 /**
  * Parse the ENABLED_TOOLS allow-list. Returns null when every tool should be
  * enabled, otherwise the set of enabled tool names.
  */
 export function parseEnabledTools(value: string | undefined): Set<string> | null {
-  if (!value) return null;
-  const tools = new Set(
-    value
-      .split(",")
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0),
-  );
+  const tools = new Set(parseList(value));
   return tools.size > 0 ? tools : null;
 }
 
 export function parseHostnames(value: string | undefined): string[] | undefined {
-  if (!value) return undefined;
-  const names = value
-    .split(",")
-    .map((name) => name.trim())
-    .filter((name) => name.length > 0);
+  const names = parseList(value);
   return names.length > 0 ? names : undefined;
 }

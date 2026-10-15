@@ -201,6 +201,14 @@ describe("reading tools", () => {
     ]);
   });
 
+  it("find_in_spreadsheet reports a spreadsheet with no sheets without naming an undefined sheet", async () => {
+    const { google, deps } = setup();
+    google.metadata = { properties: { title: "Empty" }, sheets: [] };
+    expect(await invoke(findInSpreadsheet, deps, { spreadsheet_id: "id", query: "x" })).toEqual([
+      { error: "No sheets found in spreadsheet" },
+    ]);
+  });
+
   it("spreadsheet info resource summarises sheets", async () => {
     const { deps } = setup();
     expect(await getSpreadsheetInfo(deps, "id")).toEqual({
@@ -372,6 +380,14 @@ describe("writing tools", () => {
     expect(spec.pieChart.domain.sourceRange.sources[0].endColumnIndex).toBe(1);
     expect(spec.pieChart.series.sourceRange.sources[0].startColumnIndex).toBe(1);
     expect(spec.title).toBeUndefined();
+  });
+
+  it("add_chart surfaces Google API errors instead of reporting the sheet missing", async () => {
+    const { google, deps } = setup();
+    google.override = () => errorResponse(403, "The caller does not have permission");
+    await expect(
+      invoke(addChart, deps, { spreadsheet_id: "id", sheet: "Sheet1", chart_type: "LINE", data_range: "A1:B2" }),
+    ).rejects.toMatchObject({ status: 403, message: "The caller does not have permission" });
   });
 
   it("add_chart validates chart type, sheet, and range", async () => {

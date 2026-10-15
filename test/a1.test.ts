@@ -42,6 +42,12 @@ describe("A1 helpers", () => {
     expect(() => parseA1Notation("not a range")).toThrow(/Invalid A1 notation/);
   });
 
+  it("rejects empty and half-empty ranges", () => {
+    for (const bad of ["", ":", "A1:", ":B2", "A:"]) {
+      expect(() => parseA1Notation(bad), bad).toThrow(/Invalid A1 notation/);
+    }
+  });
+
   it("splits a multi-column table into domain and series ranges", () => {
     const source = { sheetId: 123, startRowIndex: 0, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 3 };
     const [domain, series] = splitChartSourceRanges(source);

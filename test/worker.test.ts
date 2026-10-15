@@ -49,6 +49,24 @@ describe("bearer authentication", () => {
     expect(response.status).toBe(401);
   });
 
+  it("lets a CORS preflight through without a token so browser clients can proceed", async () => {
+    const response = await run(
+      new Request("http://localhost/mcp", {
+        method: "OPTIONS",
+        headers: {
+          host: "localhost",
+          origin: "http://localhost:3000",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "authorization, content-type",
+        },
+      }),
+    );
+    expect(response.status).not.toBe(401);
+    expect(response.status).toBeLessThan(300);
+    expect(response.headers.get("access-control-allow-origin")).toBeTruthy();
+    expect(response.headers.get("access-control-allow-headers") ?? "").toMatch(/authorization/i);
+  });
+
   it("fails closed when MCP_AUTH_TOKEN is not configured", async () => {
     const response = await run(rpcRequest("initialize", initializeParams(), { token: TOKEN }), { ...baseEnv, MCP_AUTH_TOKEN: undefined });
     expect(response.status).toBe(503);

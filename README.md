@@ -323,7 +323,7 @@ To gate deploys on the live Google tests, set the repository variable `RUN_LIVE_
 
 *   The endpoint fails closed: with no `MCP_AUTH_TOKEN` configured it answers `503`, and a missing or wrong token answers `401`. Token comparison is constant-time.
 *   The service account can only reach files explicitly shared with it. Share single folders rather than your whole Drive.
-*   The health check at `/` needs no token and reveals only the server name and version.
+*   The health check at `/` needs no token and reveals only the server name and version. CORS preflight (`OPTIONS`) requests are also answered without a token, since they carry no credentials and return no data; this is what lets browser-hosted MCP clients connect.
 *   For extra protection put the Worker behind [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) or restrict it to a custom domain with `MCP_ALLOWED_HOSTNAMES`.
 
 ---

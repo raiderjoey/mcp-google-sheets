@@ -24,7 +24,7 @@ import {
   getMultipleSpreadsheetSummary,
   getSheetData,
   getSheetFormulas,
-  getSheetId,
+  lookupSheetId,
   listFolders,
   listSheets,
   listSpreadsheets,
@@ -167,7 +167,7 @@ describe.skipIf(!enabled)("live Google Sheets integration", () => {
       expect(await invoke(renameSheet, deps, { spreadsheet: primaryId, sheet: "CreatedTab", new_name: "RenamedTab" })).toHaveProperty("replies");
       expect(await invoke(listSheets, deps, { spreadsheet_id: primaryId })).toContain("RenamedTab");
 
-      const sheet1Id = await getSheetId(google, primaryId, "Sheet1");
+      const sheet1Id = await lookupSheetId(google, primaryId, "Sheet1");
       expect(sheet1Id).toBeDefined();
 
       const batchResult = await invoke(batchUpdate, deps, {

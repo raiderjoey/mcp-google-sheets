@@ -152,13 +152,15 @@ export class ServiceAccountTokenProvider {
 
   private importKey(): Promise<CryptoKey> {
     if (!this.keyPromise) {
-      this.keyPromise = crypto.subtle
-        .importKey(
-          "pkcs8",
-          pemToDer(this.key.private_key),
-          { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-          false,
-          ["sign"],
+      this.keyPromise = Promise.resolve()
+        .then(() =>
+          crypto.subtle.importKey(
+            "pkcs8",
+            pemToDer(this.key.private_key),
+            { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+            false,
+            ["sign"],
+          ),
         )
         .catch((error: unknown) => {
           this.keyPromise = undefined;

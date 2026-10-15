@@ -1,8 +1,9 @@
 /**
  * Cloudflare Worker entry point.
  *
- *   GET  /            health check (no auth)
- *   POST /mcp         MCP Streamable HTTP endpoint (bearer token required)
+ *   GET     /          health check (no auth)
+ *   OPTIONS /mcp       CORS preflight (no auth; carries no data)
+ *   POST    /mcp       MCP Streamable HTTP endpoint (bearer token required)
  */
 import { createMcpHandler } from "agents/mcp/server";
 import { parseEnabledTools, parseHostnames, type Env } from "./env";
@@ -88,20 +89,24 @@ export async function handleRequest(
     return json({ error: "Not found" }, 404);
   }
 
-  const rejected = await checkBearerAuth(request, env.MCP_AUTH_TOKEN);
-  if (rejected) return rejected;
+  // A CORS preflight carries no credentials by design and returns no data, so
+  // it goes straight to the MCP handler, which answers it with CORS headers.
+  if (request.method !== "OPTIONS") {
+    const rejected = await checkBearerAuth(request, env.MCP_AUTH_TOKEN);
+    if (rejected) return rejected;
 
-  let factory: () => ReturnType<typeof createServerFromEnv>;
-  try {
-    // Fail fast on misconfiguration before handing off to the MCP transport.
-    createServerFromEnv(env, options);
-    factory = () => createServerFromEnv(env, options);
-  } catch (error) {
-    console.error(`MCP server configuration error: ${errorMessage(error)}`);
-    return json({ error: `Server is not configured: ${errorMessage(error)}` }, 503);
+    try {
+      // Fail fast on a missing or malformed service-account secret before
+      // handing off to the MCP transport. The server itself is built once,
+      // inside the factory, per request.
+      getTokenProvider(env, options);
+    } catch (error) {
+      console.error(`MCP server configuration error: ${errorMessage(error)}`);
+      return json({ error: `Server is not configured: ${errorMessage(error)}` }, 503);
+    }
   }
 
-  const handler = createMcpHandler(factory, {
+  const handler = createMcpHandler(() => createServerFromEnv(env, options), {
     route: mcpPath,
     allowedHostnames: parseHostnames(env.MCP_ALLOWED_HOSTNAMES),
     onerror: (error) => console.error(`MCP handler error: ${errorMessage(error)}`),

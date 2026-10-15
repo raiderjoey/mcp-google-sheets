@@ -33,11 +33,13 @@ gitignored; tsconfig references it, so run typecheck (not bare `tsc`) after chan
 
 Request flow, one Worker request at a time:
 
-1. `src/index.ts` routes `/` (health, no auth) and `MCP_PATH` (default `/mcp`). It checks
-   the bearer token (SHA-256 then `timingSafeEqual`), fails closed with 503 when
-   `MCP_AUTH_TOKEN` or the service-account secret is missing, then builds a stateless
-   handler with `createMcpHandler` from `agents/mcp/server`. The handler is created per
-   request because the factory needs `env`; the SDK's factory signature does not receive it.
+1. `src/index.ts` routes `/` (health, no auth) and `MCP_PATH` (default `/mcp`). For every
+   method except `OPTIONS` it checks the bearer token (SHA-256 then `timingSafeEqual`) and
+   fails closed with 503 when `MCP_AUTH_TOKEN` or the service-account secret is missing.
+   `OPTIONS` (CORS preflight) skips both checks and is answered by the handler. The
+   stateless handler from `createMcpHandler` (`agents/mcp/server`) is created per request
+   because the factory needs `env`; the SDK's factory signature does not receive it. The
+   `McpServer` is built once per request, inside the factory.
 2. `src/server.ts` `createServer` registers every entry in `TOOLS` (filtered by
    `ENABLED_TOOLS`) plus the `spreadsheet://{spreadsheet_id}/info` resource. It is the only
    place that knows about MCP result framing: tool return values become one JSON text

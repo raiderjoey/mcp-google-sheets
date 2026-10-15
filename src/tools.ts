@@ -7,7 +7,7 @@
 import { z } from "zod";
 import { columnIndexToLetter, parseA1Notation, splitChartSourceRanges, type GridRange } from "./a1";
 import { errorMessage } from "./google/auth";
-import type { CellValue, GoogleClient, SpreadsheetMetadata } from "./google/client";
+import type { GoogleClient, SpreadsheetMetadata } from "./google/client";
 
 export interface ToolDeps {
   google: GoogleClient;
@@ -47,18 +47,10 @@ function findSheetId(spreadsheet: SpreadsheetMetadata, title: string): number | 
   return undefined;
 }
 
-async function lookupSheetId(google: GoogleClient, spreadsheetId: string, title: string): Promise<number | undefined> {
+/** Resolve a sheet title to its numeric sheetId. Google API errors propagate to the caller. */
+export async function lookupSheetId(google: GoogleClient, spreadsheetId: string, title: string): Promise<number | undefined> {
   const spreadsheet = await google.sheets.get(spreadsheetId, { fields: "sheets(properties(title,sheetId))" });
   return findSheetId(spreadsheet, title);
-}
-
-/** Same as lookupSheetId but swallows API errors, matching the original `_get_sheet_id`. */
-export async function getSheetId(google: GoogleClient, spreadsheetId: string, title: string): Promise<number | undefined> {
-  try {
-    return await lookupSheetId(google, spreadsheetId, title);
-  } catch {
-    return undefined;
-  }
 }
 
 /** Escape a value for use inside a single-quoted Drive query string. */
@@ -126,22 +118,21 @@ export const getMultipleSheetData = defineTool({
       .array(z.record(z.string(), z.string()))
       .describe("List of objects with 'spreadsheet_id', 'sheet', and 'range' keys."),
   }),
-  async handler({ google }, { queries }) {
-    const results: Array<Record<string, unknown>> = [];
-    for (const query of queries) {
-      const { spreadsheet_id, sheet, range } = query;
-      if (!spreadsheet_id || !sheet || !range) {
-        results.push({ ...query, error: "Missing required keys (spreadsheet_id, sheet, range)" });
-        continue;
-      }
-      try {
-        const result = await google.sheets.valuesGet(spreadsheet_id, `${sheet}!${range}`);
-        results.push({ ...query, data: result.values ?? [] });
-      } catch (error) {
-        results.push({ ...query, error: errorMessage(error) });
-      }
-    }
-    return results;
+  handler({ google }, { queries }) {
+    return Promise.all(
+      queries.map(async (query): Promise<Record<string, unknown>> => {
+        const { spreadsheet_id, sheet, range } = query;
+        if (!spreadsheet_id || !sheet || !range) {
+          return { ...query, error: "Missing required keys (spreadsheet_id, sheet, range)" };
+        }
+        try {
+          const result = await google.sheets.valuesGet(spreadsheet_id, `${sheet}!${range}`);
+          return { ...query, data: result.values ?? [] };
+        } catch (error) {
+          return { ...query, error: errorMessage(error) };
+        }
+      }),
+    );
   },
 });
 
@@ -159,48 +150,48 @@ export const getMultipleSpreadsheetSummary = defineTool({
       .default(5)
       .describe("Number of rows (including header) to fetch for the summary (default 5)."),
   }),
-  async handler({ google }, { spreadsheet_ids, rows_to_fetch }) {
-    const summaries: Array<Record<string, unknown>> = [];
-    for (const id of spreadsheet_ids) {
-      const summary: Record<string, unknown> = { spreadsheet_id: id, title: null, sheets: [], error: null };
-      try {
-        const spreadsheet = await google.sheets.get(id, { fields: "properties.title,sheets(properties(title,sheetId))" });
-        summary.title = spreadsheet.properties?.title ?? "Unknown Title";
-        const sheetSummaries: Array<Record<string, unknown>> = [];
-        for (const sheet of spreadsheet.sheets ?? []) {
-          const title = sheet.properties?.title;
-          const sheetSummary: Record<string, unknown> = {
-            title,
-            sheet_id: sheet.properties?.sheetId,
-            headers: [],
-            first_rows: [],
-            error: null,
-          };
-          if (!title) {
-            sheetSummary.error = "Sheet title not found";
-            sheetSummaries.push(sheetSummary);
-            continue;
-          }
-          try {
-            const maxRow = Math.max(1, rows_to_fetch);
-            const result = await google.sheets.valuesGet(id, `${title}!A1:${maxRow}`);
-            const values = result.values ?? [];
-            if (values.length > 0) {
-              sheetSummary.headers = values[0];
-              if (values.length > 1) sheetSummary.first_rows = values.slice(1, maxRow);
-            }
-          } catch (error) {
-            sheetSummary.error = `Error fetching data for sheet ${title}: ${errorMessage(error)}`;
-          }
-          sheetSummaries.push(sheetSummary);
-        }
-        summary.sheets = sheetSummaries;
-      } catch (error) {
-        summary.error = `Error fetching spreadsheet ${id}: ${errorMessage(error)}`;
+  handler({ google }, { spreadsheet_ids, rows_to_fetch }) {
+    const maxRow = Math.max(1, rows_to_fetch);
+
+    const summariseSheet = async (id: string, sheet: { properties?: { title?: string; sheetId?: number } }) => {
+      const title = sheet.properties?.title;
+      const sheetSummary: Record<string, unknown> = {
+        title,
+        sheet_id: sheet.properties?.sheetId,
+        headers: [],
+        first_rows: [],
+        error: null,
+      };
+      if (!title) {
+        sheetSummary.error = "Sheet title not found";
+        return sheetSummary;
       }
-      summaries.push(summary);
-    }
-    return summaries;
+      try {
+        const result = await google.sheets.valuesGet(id, `${title}!A1:${maxRow}`);
+        const values = result.values ?? [];
+        if (values.length > 0) {
+          sheetSummary.headers = values[0];
+          if (values.length > 1) sheetSummary.first_rows = values.slice(1, maxRow);
+        }
+      } catch (error) {
+        sheetSummary.error = `Error fetching data for sheet ${title}: ${errorMessage(error)}`;
+      }
+      return sheetSummary;
+    };
+
+    return Promise.all(
+      spreadsheet_ids.map(async (id): Promise<Record<string, unknown>> => {
+        const summary: Record<string, unknown> = { spreadsheet_id: id, title: null, sheets: [], error: null };
+        try {
+          const spreadsheet = await google.sheets.get(id, { fields: "properties.title,sheets(properties(title,sheetId))" });
+          summary.title = spreadsheet.properties?.title ?? "Unknown Title";
+          summary.sheets = await Promise.all((spreadsheet.sheets ?? []).map((sheet) => summariseSheet(id, sheet)));
+        } catch (error) {
+          summary.error = `Error fetching spreadsheet ${id}: ${errorMessage(error)}`;
+        }
+        return summary;
+      }),
+    );
   },
 });
 
@@ -237,7 +228,7 @@ export const findInSpreadsheet = defineTool({
         .map((s) => s.properties?.title)
         .filter((title): title is string => typeof title === "string" && (sheet === undefined || title === sheet));
       if (sheetsToSearch.length === 0) {
-        return [{ error: `Sheet '${sheet}' not found` }];
+        return [{ error: sheet === undefined ? "No sheets found in spreadsheet" : `Sheet '${sheet}' not found` }];
       }
       const needle = case_sensitive ? query : query.toLowerCase();
       for (const name of sheetsToSearch) {
@@ -428,11 +419,8 @@ export const batchUpdate = defineTool({
     requests: z.array(z.record(z.string(), z.unknown())).describe("List of batchUpdate request objects"),
   }),
   async handler({ google }, { spreadsheet_id, requests }) {
-    if (!requests || requests.length === 0) {
+    if (requests.length === 0) {
       return { error: "requests list cannot be empty" };
-    }
-    if (!requests.every((req) => typeof req === "object" && req !== null && !Array.isArray(req))) {
-      return { error: "Each request must be a dictionary" };
     }
     return google.sheets.batchUpdate(spreadsheet_id, requests);
   },
@@ -464,7 +452,7 @@ export const addChart = defineTool({
     if (!(CHART_TYPES as readonly string[]).includes(chartType)) {
       return { error: `Invalid chart type '${args.chart_type}'. Must be one of: ${CHART_TYPES.join(", ")}` };
     }
-    const sheetId = await getSheetId(google, args.spreadsheet_id, args.sheet);
+    const sheetId = await lookupSheetId(google, args.spreadsheet_id, args.sheet);
     if (sheetId === undefined) {
       return { error: `Sheet '${args.sheet}' not found in spreadsheet` };
     }
@@ -747,5 +735,3 @@ export const TOOLS: ToolDefinition[] = [
 ];
 
 export const TOOL_NAMES: string[] = TOOLS.map((tool) => tool.name);
-
-export type CellGrid = CellValue[][];

@@ -42,6 +42,10 @@ export function parseA1Notation(rangeStr: string): A1Indices {
     throw new Error(`Invalid A1 notation: ${rangeStr}`);
   }
   const [, startCol, startRow, endCol, endRow] = match;
+  const hasColon = rangeStr.includes(":");
+  if ((!startCol && !startRow) || (hasColon && !endCol && !endRow)) {
+    throw new Error(`Invalid A1 notation: ${rangeStr}`);
+  }
   const result: A1Indices = {};
 
   if (startCol) {

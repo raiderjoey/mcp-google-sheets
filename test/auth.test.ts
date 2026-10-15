@@ -89,6 +89,16 @@ describe("ServiceAccountTokenProvider", () => {
     await expect(provider.getAccessToken()).rejects.toThrow(/Google token request failed \(400\)/);
   });
 
+  it("wraps a private key that is not even valid PEM or base64", async () => {
+    const provider = new ServiceAccountTokenProvider(
+      { client_email: "x@y", private_key: "not-a-key!" },
+      { fetch: async () => Response.json({ access_token: "tok" }) },
+    );
+    await expect(provider.getAccessToken()).rejects.toThrow(/Could not import service account private key/);
+    // and it keeps failing the same way, rather than caching a broken promise
+    await expect(provider.getAccessToken()).rejects.toThrow(/Could not import service account private key/);
+  });
+
   it("reports an unusable private key", async () => {
     const provider = new ServiceAccountTokenProvider(
       { client_email: "x@y", private_key: "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----" },
