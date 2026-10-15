@@ -1,0 +1,32 @@
+{
+  "name": "mcp-google-sheets-workers",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Google Sheets and Drive MCP server running on Cloudflare Workers (Streamable HTTP).",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "wrangler types && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cf-typegen": "wrangler types",
+    "pretest": "wrangler types",
+    "test:integration": "vitest run test/google-integration.test.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.0.0",
+    "agents": "^0.23.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.1.11",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.133.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mcp-google-sheets",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // Non-secret configuration. Override per environment or with `wrangler secret put`.
+  //
+  // Secrets (set with `npx wrangler secret put <NAME>`, never commit them):
+  //   GOOGLE_SERVICE_ACCOUNT_JSON  Service-account key JSON (raw or base64). CREDENTIALS_CONFIG is accepted as an alias.
+  //   MCP_AUTH_TOKEN               Shared bearer token MCP clients must send.
+  //
+  // Optional vars:
+  //   DRIVE_FOLDER_ID              Default Drive folder for list/create operations.
+  //   ENABLED_TOOLS                Comma-separated allow-list of tool names.
+  //   MCP_ALLOWED_HOSTNAMES        Comma-separated hostnames when serving from a custom domain.
+  "vars": {
+    "MCP_PATH": "/mcp"
+  }
+}

@@ -1,16 +1,13 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
+node_modules/
 dist/
-wheels/
-*.egg-info
+.wrangler/
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.env
+*.log
 **/credentials.json
 **/token.json
 **/service_account.json
-
-.env
 .codex/github-todos/
-
-# Virtual environments
-.venv
+worker-configuration.d.ts

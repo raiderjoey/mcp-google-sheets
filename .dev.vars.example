@@ -1,0 +1,9 @@
+# Copy to .dev.vars for `npm run dev`. Never commit .dev.vars.
+# Service-account key JSON, either raw JSON on one line or base64-encoded.
+GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","client_email":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","token_uri":"https://oauth2.googleapis.com/token"}
+# Shared secret MCP clients must send as `Authorization: Bearer <token>`.
+MCP_AUTH_TOKEN=change-me
+# Optional: default Drive folder ID for list/create operations.
+DRIVE_FOLDER_ID=
+# Optional: comma-separated allow-list of tool names.
+ENABLED_TOOLS=

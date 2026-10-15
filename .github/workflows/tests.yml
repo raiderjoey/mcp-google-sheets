@@ -8,28 +8,21 @@ on:
 
 jobs:
   unit:
-    name: Unit tests
+    name: Typecheck and unit tests
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version:
-          - "3.10"
-          - "3.12"
-
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-
-      - name: Set up Python
-        run: uv python install ${{ matrix.python-version }}
+          node-version: 22
+          cache: npm
 
       - name: Install dependencies
-        run: uv sync --frozen --python ${{ matrix.python-version }}
+        run: npm ci
 
-      - name: Run credential-free unit tests
-        run: uv run --python ${{ matrix.python-version }} python -m unittest discover -s tests -p 'test_*.py'
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run credential-free tests
+        run: npm test

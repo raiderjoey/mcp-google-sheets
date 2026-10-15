@@ -1,618 +1,357 @@
 <div align="center">
-  <!-- Main Title Link -->
   <b>mcp-google-sheets</b>
+  <p align="center"><i>Your AI assistant's gateway to Google Sheets, running on Cloudflare Workers.</i> 📊</p>
 
-  <!-- Description Paragraph -->
-  <p align="center">
-    <i>Your AI Assistant's Gateway to Google Sheets! </i>📊
-  </p>
-
-[![PyPI - Version](https://img.shields.io/pypi/v/mcp-google-sheets)](https://pypi.org/project/mcp-google-sheets/)
-[![PyPI Downloads](https://static.pepy.tech/badge/mcp-google-sheets)](https://pepy.tech/projects/mcp-google-sheets)
-![GitHub License](https://img.shields.io/github/license/xing5/mcp-google-sheets)
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/xing5/mcp-google-sheets/release.yml)
+![GitHub License](https://img.shields.io/github/license/raiderjoey/mcp-google-sheets)
+![Tests](https://img.shields.io/github/actions/workflow/status/raiderjoey/mcp-google-sheets/tests.yml?label=tests)
 </div>
 
 ---
 
 ## 🤔 What is this?
 
-`mcp-google-sheets` is a Python-based MCP server that acts as a bridge between any MCP-compatible client (like Claude Desktop) and the Google Sheets API. It allows you to interact with your Google Spreadsheets using a defined set of tools, enabling powerful automation and data manipulation workflows driven by AI.
+`mcp-google-sheets` is a remote [Model Context Protocol](https://modelcontextprotocol.io) server that lets MCP clients such as Claude Code, Claude Desktop, and Cursor read and write Google Sheets and browse Google Drive.
+
+This fork is a TypeScript port of [xing5/mcp-google-sheets](https://github.com/xing5/mcp-google-sheets) that runs on **Cloudflare Workers** using the **Streamable HTTP** transport. It exposes the same 20 tools and the same tool and argument names, so prompts written for the original server keep working.
+
+Why Workers:
+
+*   No server to run. Deploy once, get a globally available HTTPS endpoint.
+*   No Python toolchain on the client. Any MCP client that speaks HTTP can connect.
+*   Secrets live in Cloudflare, not in a config file on every machine.
+
+**Key features**
+
+*   **Comprehensive tools:** read, write, batch update, insert rows and columns, copy and rename sheets, search, find, share, charts, and raw `batchUpdate` access.
+*   **Drive aware:** list and create spreadsheets inside a chosen folder, browse folders, search by name or content.
+*   **Tool filtering:** register only the tools you need with `ENABLED_TOOLS` to keep the client's context small.
+*   **Secure by default:** bearer-token gate, constant-time comparison, fail-closed configuration, service-account scope limited to what you share.
+*   **Tested:** 66 unit and end-to-end tests run inside the Workers runtime, plus an opt-in live suite that exercises every tool against Google.
 
 ---
 
-## 🚀 Quick Start (Using `uvx`)
+## 🚀 Quick Start
 
-Essentially the server runs in one line: `uvx mcp-google-sheets@latest`. 
+**Prerequisites**
 
-This command will automatically download the latest code and run it. **We recommend always using `@latest`** to ensure you have the newest version with the latest features and bug fixes.
+*   Node.js 20 or newer and a free [Cloudflare account](https://dash.cloudflare.com/sign-up).
+*   A Google Cloud project with the **Google Sheets API** and **Google Drive API** enabled, and a **service account** key file (see [Google Cloud setup](#️-google-cloud-setup)).
 
-_Refer to the [ID Reference Guide](#-id-reference-guide) for more information about the IDs used below._
-
-1.  **☁️ Prerequisite: Google Cloud Setup**
-    *   You **must** configure Google Cloud Platform credentials and enable the necessary APIs first. We strongly recommend using a **Service Account**.
-    *   ➡️ Jump to the [**Detailed Google Cloud Platform Setup**](#-google-cloud-platform-setup-detailed) guide below.
-
-2.  **🐍 Install `uv`**
-    *   `uvx` is part of `uv`, a fast Python package installer and resolver. Install it if you haven't already:
-        ```bash
-        # macOS / Linux
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        # Windows
-        powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-        # Or using pip:
-        # pip install uv
-        ```
-        *Follow instructions in the installer output to add `uv` to your PATH if needed.*
-
-3.  **🔑 Set Essential Environment Variables (Service Account Recommended)**
-    *   You need to tell the server how to authenticate. Set these variables in your terminal:
-    *   **(Linux/macOS)**
-        ```bash
-        # Replace with YOUR actual path and folder ID from the Google Setup step
-        export SERVICE_ACCOUNT_PATH="/path/to/your/service-account-key.json"
-        export DRIVE_FOLDER_ID="YOUR_DRIVE_FOLDER_ID"
-        ```
-    *   **(Windows CMD)**
-        ```cmd
-        set SERVICE_ACCOUNT_PATH="C:\path\to\your\service-account-key.json"
-        set DRIVE_FOLDER_ID="YOUR_DRIVE_FOLDER_ID"
-        ```
-    *   **(Windows PowerShell)**
-        ```powershell
-        $env:SERVICE_ACCOUNT_PATH = "C:\path\to\your\service-account-key.json"
-        $env:DRIVE_FOLDER_ID = "YOUR_DRIVE_FOLDER_ID"
-        ```
-    *   ➡️ See [**Detailed Authentication & Environment Variables**](#-authentication--environment-variables-detailed) for other options (OAuth, `CREDENTIALS_CONFIG`).
-
-4.  **🏃 Run the Server!**
-    *   `uvx` will automatically download and run the latest version of `mcp-google-sheets`:
-        ```bash
-        uvx mcp-google-sheets@latest
-        ```
-    *   The server will start and print logs indicating it's ready.
-    *   
-    *   > **💡 Pro Tip:** Always use `@latest` to ensure you get the newest version with bug fixes and features. Without `@latest`, `uvx` may use a cached older version.
-
-5.  **🔌 Connect your MCP Client**
-    *   Configure your client (e.g., Claude Desktop) to connect to the running server.
-    *   Depending on the client you use, you might not need step 4 because the client can launch the server for you. But it's a good practice to test run step 4 anyway to make sure things are set up properly.
-    *   ➡️ See [**Usage with Claude Desktop**](#-usage-with-claude-desktop) for examples.
-
-6.  **⚡ Optional: Enable Tool Filtering (Reduce Context Usage)**
-    *   By default, all 19 tools are enabled (~13K tokens). To reduce context usage, enable only the tools you need.
-    *   ➡️ See [**Tool Filtering**](#-tool-filtering-reduce-context-usage) for details.
-
-You're ready! Start issuing commands via your MCP client.
-
----
-
-## ✨ Key Features
-
-*   **Seamless Integration:** Connects directly to Google Drive & Google Sheets APIs.
-*   **Comprehensive Tools:** Offers a wide range of operations (CRUD, listing, batching, sharing, formatting, etc.).
-*   **Flexible Authentication:** Supports **Service Accounts (recommended)**, OAuth 2.0, and direct credential injection via environment variables.
-*   **Easy Deployment:** Run instantly with `uvx` (zero-install feel) or clone for development using `uv`.
-*   **AI-Ready:** Designed for use with MCP-compatible clients, enabling natural language spreadsheet interaction.
-*   **Tool Filtering:** Reduce context window usage by enabling only the tools you need with `--include-tools` or `ENABLED_TOOLS` environment variable.
-
----
-
-## 🎯 Tool Filtering (Reduce Context Usage)
-
-**Problem:** By default, this MCP server exposes all 19 tools, consuming ~13,000 tokens before any conversation begins. If you only need a few tools, this wastes valuable context window space.
-
-**Solution:** Use tool filtering to enable only the tools you actually use.
-
-### How to Enable Tool Filtering
-
-You can filter tools using either:
-
-1. **Command-line argument** `--include-tools`:
-   ```json
-   {
-     "mcpServers": {
-       "google-sheets": {
-         "command": "uvx",
-         "args": [
-           "mcp-google-sheets@latest",
-           "--include-tools",
-           "get_sheet_data,update_cells,list_spreadsheets,list_sheets"
-         ],
-         "env": {
-           "SERVICE_ACCOUNT_PATH": "/path/to/credentials.json"
-         }
-       }
-     }
-   }
-   ```
-
-2. **Environment variable** `ENABLED_TOOLS`:
-   ```json
-   {
-     "mcpServers": {
-       "google-sheets": {
-         "command": "uvx",
-         "args": ["mcp-google-sheets@latest"],
-         "env": {
-           "SERVICE_ACCOUNT_PATH": "/path/to/credentials.json",
-           "ENABLED_TOOLS": "get_sheet_data,update_cells,list_spreadsheets,list_sheets"
-         }
-       }
-     }
-   }
-   ```
-
-### Available Tool Names
-
-When filtering, use these exact tool names (comma-separated, no spaces):
-
-**Most Common Tools (recommended subset):**
-- `get_sheet_data` - Read from spreadsheets
-- `update_cells` - Write to spreadsheets
-- `list_spreadsheets` - Find spreadsheets
-- `list_sheets` - Navigate tabs
-
-**All Available Tools:**
-- `add_columns`
-- `add_rows`
-- `batch_update`
-- `batch_update_cells`
-- `copy_sheet`
-- `create_sheet`
-- `create_spreadsheet`
-- `find_in_spreadsheet`
-- `get_multiple_sheet_data`
-- `get_multiple_spreadsheet_summary`
-- `get_sheet_data`
-- `get_sheet_formulas`
-- `list_folders`
-- `list_sheets`
-- `list_spreadsheets`
-- `rename_sheet`
-- `search_spreadsheets`
-- `share_spreadsheet`
-- `update_cells`
-
-**Note:** If neither `--include-tools` nor `ENABLED_TOOLS` is specified, all tools are enabled (default behavior).
-
----
-
-## 🛠️ Available Tools & Resources
-
-This server exposes the following tools for interacting with Google Sheets:
-
-_Refer to the [ID Reference Guide](#-id-reference-guide) for more information about the IDs used below._
-
-*(Input parameters are typically strings unless otherwise specified)*
-
-*   **`list_spreadsheets`**: Lists spreadsheets in the configured Drive folder (Service Account) or accessible by the user (OAuth).
-    *   `folder_id` (optional string): Google Drive folder ID to search in. Get from its URL. If omitted, uses the configured default folder or searches 'My Drive'.
-    *   _Returns:_ List of objects `[{id: string, title: string}]`
-*   **`create_spreadsheet`**: Creates a new spreadsheet.
-    *   `title` (string): The desired title for the spreadsheet. Example: "Quarterly Report Q4".
-    *   `folder_id` (optional string): Google Drive folder ID where the spreadsheet should be created. Get from its URL. If omitted, uses configured default or root.
-    *   _Returns:_ Object with spreadsheet info, including `spreadsheetId`, `title`, and `folder`.
-*   **`get_sheet_data`**: Reads data from a range in a sheet/tab.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   `sheet` (string): Name of the sheet/tab (e.g., "Sheet1").
-    *   `range` (optional string): A1 notation (e.g., `'A1:C10'`, `'Sheet1!B2:D'`). If omitted, reads the whole sheet/tab specified by `sheet`.
-    *   `include_grid_data` (optional boolean, default `False`): If `True`, returns full grid data including formatting and metadata (much larger). If `False`, returns values only (more efficient).
-    *   _Returns:_ If `include_grid_data=True`, full grid data with metadata ([`get` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/get#response-body)). If `False`, a values result object from the Values API ([`values.get` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/get#response-body)).
-*   **`get_sheet_formulas`**: Reads formulas from a range in a sheet/tab.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   `sheet` (string): Name of the sheet/tab (e.g., "Sheet1").
-    *   `range` (optional string): A1 notation (e.g., `'A1:C10'`, `'Sheet1!B2:D'`). If omitted, reads all formulas in the sheet/tab specified by `sheet`.
-    *   _Returns:_ 2D array of cell formulas (array of arrays) ([`values.get` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/get#response-body)).
-*   **`update_cells`**: Writes data to a specific range. Overwrites existing data.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   `sheet` (string): Name of the sheet/tab (e.g., "Sheet1").
-    *   `range` (string): A1 notation range to write to (e.g., 'A1:C3').
-    *   `data` (array of arrays): 2D array of values to write. Example: `[[1, 2, 3], ["a", "b", "c"]]`.
-    *   _Returns:_ Update result object ([`values.update` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/update#response-body)).
-*   **`batch_update_cells`**: Updates multiple ranges in one API call.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   `sheet` (string): Name of the sheet/tab (e.g., "Sheet1").
-    *   `ranges` (object): Dictionary mapping range strings (A1 notation) to 2D arrays of values. Example: `{ "A1:B2": [[1, 2], [3, 4]], "D5": [["Hello"]] }`.
-    *   _Returns:_ Result of the operation ([`values.batchUpdate` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/batchUpdate#response-body)).
-*   **`add_rows`**: Adds (inserts) empty rows to a sheet/tab at a specified index.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   `sheet` (string): Name of the sheet/tab (e.g., "Sheet1").
-    *   `count` (integer): Number of empty rows to insert.
-    *   `start_row` (optional integer, default `0`): 0-based row index to start inserting rows. If omitted, defaults to `0` (inserts at the beginning).
-    *   _Returns:_ Result of the operation ([`batchUpdate` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/batchUpdate#response-body)).
-*   **`list_sheets`**: Lists all sheet/tab names within a spreadsheet.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   _Returns:_ List of sheet/tab name strings. Example: `["Sheet1", "Sheet2"]`.
-*   **`create_sheet`**: Adds a new sheet/tab to a spreadsheet.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   `title` (string): Name for the new sheet/tab.
-    *   _Returns:_ New sheet properties object.
-*   **`get_multiple_sheet_data`**: Fetches data from multiple ranges across potentially different spreadsheets in one call.
-    *   `queries` (array of objects): Each object needs `spreadsheet_id`, `sheet`, and `range`. Example: `[{"spreadsheet_id": "abc", "sheet": "Sheet1", "range": "A1:B2"}, ...]`.
-    *   _Returns:_ List of objects, each containing the query params and fetched `data` or an `error`. Each `data` is a [`values.get` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/get#response-body).
-*   **`get_multiple_spreadsheet_summary`**: Gets titles, sheet/tab names, headers, and first few rows for multiple spreadsheets.
-    *   `spreadsheet_ids` (array of strings): IDs of the spreadsheets (from their URLs).
-    *   `rows_to_fetch` (optional integer, default `5`): How many rows (including header) to preview. Example: `5`.
-    *   _Returns:_ List of summary objects for each spreadsheet.
-*   **`share_spreadsheet`**: Shares a spreadsheet with specified users/emails and roles.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   `recipients` (array of objects): `[{"email_address": "user@example.com", "role": "writer"}, ...]`. Roles: `reader`, `commenter`, `writer`.
-    *   `send_notification` (optional boolean, default `True`): Send email notifications to recipients.
-    *   _Returns:_ Dictionary with `successes` and `failures` lists.
-*   **`add_columns`**: Adds (inserts) empty columns to a sheet/tab at a specified index.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   `sheet` (string): Name of the sheet/tab (e.g., "Sheet1").
-    *   `count` (integer): Number of empty columns to insert.
-    *   `start_column` (optional integer, default `0`): 0-based column index to start inserting. If omitted, defaults to `0` (inserts at the beginning).
-    *   _Returns:_ Result of the operation ([`batchUpdate` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/batchUpdate#response-body)).
-*   **`copy_sheet`**: Duplicates a sheet/tab from one spreadsheet to another and optionally renames it.
-    *   `src_spreadsheet` (string): Source spreadsheet ID (from its URL).
-    *   `src_sheet` (string): Source sheet/tab name (e.g., "Sheet1").
-    *   `dst_spreadsheet` (string): Destination spreadsheet ID (from its URL).
-    *   `dst_sheet` (string): Desired sheet/tab name in the destination spreadsheet.
-    *   _Returns:_ Result of the copy and optional rename operations.
-*   **`rename_sheet`**: Renames an existing sheet/tab.
-    *   `spreadsheet` (string): The spreadsheet ID (from its URL).
-    *   `sheet` (string): Current sheet/tab name (e.g., "Sheet1").
-    *   `new_name` (string): New sheet/tab name (e.g., "Transactions").
-    *   _Returns:_ Result of the operation ([`batchUpdate` response](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/batchUpdate#response-body)).
-*   **`add_chart`**: Creates a chart in a Google Spreadsheet from specified data.
-    *   `spreadsheet_id` (string): The spreadsheet ID (from its URL).
-    *   `sheet` (string): Name of the sheet/tab containing the data (e.g., "Sheet1").
-    *   `chart_type` (string): Type of chart to create. Options: `COLUMN` (vertical bars), `BAR` (horizontal bars), `LINE`, `AREA`, `PIE`, `SCATTER`, `COMBO`, `HISTOGRAM`.
-    *   `data_range` (string): A1 notation range for the chart data (e.g., "A1:C10"). First row is treated as headers.
-    *   `title` (optional string): Chart title.
-    *   `x_axis_label` (optional string): Label for the X axis (bottom axis). Not applicable for pie charts.
-    *   `y_axis_label` (optional string): Label for the Y axis (left axis). Not applicable for pie charts.
-    *   `position_x` (optional integer, default `0`): Horizontal position offset in pixels from the top-left corner.
-    *   `position_y` (optional integer, default `0`): Vertical position offset in pixels from the top-left corner.
-    *   `width` (optional integer, default `600`): Width of the chart in pixels.
-    *   `height` (optional integer, default `400`): Height of the chart in pixels.
-    *   _Returns:_ Result object with success status, chart ID, and operation details.
-
-**MCP Resources:**
-
-*   **`spreadsheet://{spreadsheet_id}/info`**: Get basic metadata about a Google Spreadsheet.
-    *   _Returns:_ JSON string with spreadsheet information.
-
----
-
-## ☁️ Google Cloud Platform Setup (Detailed)
-
-This setup is **required** before running the server.
-
-1.  **Create/Select a GCP Project:** Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2.  **Enable APIs:** Navigate to "APIs & Services" -> "Library". Search for and enable:
-    *   `Google Sheets API`
-    *   `Google Drive API`
-3.  **Configure Credentials:** You need to choose *one* authentication method below (Service Account is recommended).
-
----
-
-## 🔑 Authentication & Environment Variables (Detailed)
-
-The server needs credentials to access Google APIs. Choose one method:
-
-_Refer to the [ID Reference Guide](#-id-reference-guide) for more information about the IDs used below._
-
-### Method A: Service Account (Recommended for Servers/Automation) ✅
-
-*   **Why?** Headless (no browser needed), secure, ideal for server environments. Doesn't expire easily.
-*   **Steps:**
-    1.  **Create Service Account:** In GCP Console -> "IAM & Admin" -> "Service Accounts".
-        *   Click "+ CREATE SERVICE ACCOUNT". Name it (e.g., `mcp-sheets-service`).
-        *   Grant Roles: Add `Editor` role for broad access, or more granular roles (like `roles/drive.file` and specific Sheets roles) for stricter permissions.
-        *   Click "Done". Find the account, click Actions (⋮) -> "Manage keys".
-        *   Click "ADD KEY" -> "Create new key" -> **JSON** -> "CREATE".
-        *   **Download and securely store** the JSON key file.
-    2.  **Create & Share Google Drive Folder:**
-        *   In [Google Drive](https://drive.google.com/), create a folder (e.g., "AI Managed Sheets").
-        *   Note the **Folder ID** from the URL: `https://drive.google.com/drive/folders/THIS_IS_THE_FOLDER_ID`.
-        *   Right-click the folder -> "Share" -> "Share".
-        *   Enter the Service Account's email (from the JSON file `client_email`).
-        *   Grant **Editor** access. Uncheck "Notify people". Click "Share".
-    3.  **Set Environment Variables:**
-        *   `SERVICE_ACCOUNT_PATH`: Full path to the downloaded JSON key file.
-        *   `DRIVE_FOLDER_ID`: The ID of the shared Google Drive folder.
-        *(See [Ultra Quick Start](#-ultra-quick-start-using-uvx) for OS-specific examples)*
-
-### Method B: OAuth 2.0 (Interactive / Personal Use) 🧑‍💻
-
-*   **Why?** For personal use or local development where interactive browser login is okay.
-*   **Steps:**
-    1.  **Configure OAuth Consent Screen:** In GCP Console -> "APIs & Services" -> "OAuth consent screen". Select "External", fill required info, add scopes (`.../auth/spreadsheets`, `.../auth/drive`), add test users if needed.
-    2.  **Create OAuth Client ID:** In GCP Console -> "APIs & Services" -> "Credentials". "+ CREATE CREDENTIALS" -> "OAuth client ID" -> Type: **Desktop app**. Name it. "CREATE". **Download JSON**.
-    3.  **Set Environment Variables:**
-        *   `CREDENTIALS_PATH`: Path to the downloaded OAuth credentials JSON file (default: `credentials.json`).
-        *   `TOKEN_PATH`: Path to store the user's refresh token after first login (default: `token.json`). Must be writable.
-
-### Method C: Direct Credential Injection (Advanced) 🔒
-
-*   **Why?** Useful in environments like Docker, Kubernetes, or CI/CD where managing files is hard, but environment variables are easy/secure. Avoids file system access.
-*   **How?** Instead of providing a *path* to the credentials file, you provide the *content* of the file, encoded in Base64, directly in an environment variable.
-*   **Steps:**
-    1.  **Get your credentials JSON file** (either Service Account key or OAuth Client ID file). Let's call it `your_credentials.json`.
-    2.  **Generate the Base64 string:**
-        *   **(Linux/macOS):** `base64 -w 0 your_credentials.json`
-        *   **(Windows PowerShell):**
-            ```powershell
-            $filePath = "C:\path\to\your_credentials.json"; # Use actual path
-            $bytes = [System.IO.File]::ReadAllBytes($filePath);
-            $base64 = [System.Convert]::ToBase64String($bytes);
-            $base64 # Copy this output
-            ```
-        *   **(Caution):** Avoid pasting sensitive credentials into untrusted online encoders.
-    3.  **Set the Environment Variable:**
-        *   `CREDENTIALS_CONFIG`: Set this variable to the **full Base64 string** you just generated.
-            ```bash
-            # Example (Linux/macOS) - Use the actual string generated
-            export CREDENTIALS_CONFIG="ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb..."
-            ```
-
-### Method D: Application Default Credentials (ADC) 🌐
-
-*   **Why?** Ideal for Google Cloud environments (GKE, Compute Engine, Cloud Run) and local development with `gcloud auth application-default login`. No explicit credential files needed.
-*   **How?** Uses Google's Application Default Credentials chain to automatically discover credentials from multiple sources.
-*   **ADC Search Order:**
-    1.  `GOOGLE_APPLICATION_CREDENTIALS` environment variable (path to service account key) - **Google's standard variable**
-    2.  `gcloud auth application-default login` credentials (local development)
-    3.  Attached service account from metadata server (GKE, Compute Engine, etc.)
-*   **Setup:**
-    *   **Local Development:** 
-        1. Run `gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/drive` once
-        2. Set a quota project: `gcloud auth application-default set-quota-project <project_id>` (replace `<project_id>` with your Google Cloud project ID)
-    *   **Google Cloud:** Attach a service account to your compute resource
-    *   **Environment Variable:** Set `GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json` (Google's standard)
-*   **No additional environment variables needed** - ADC is used automatically as a fallback when other methods fail.
-
-**Note:** `GOOGLE_APPLICATION_CREDENTIALS` is Google's official standard environment variable, while `SERVICE_ACCOUNT_PATH` is specific to this MCP server. If you set `GOOGLE_APPLICATION_CREDENTIALS`, ADC will find it automatically.
-
-### Authentication Priority & Summary
-
-The server checks for credentials in this order:
-
-1.  `CREDENTIALS_CONFIG` (Base64 content)
-2.  `SERVICE_ACCOUNT_PATH` (Path to Service Account JSON)
-3.  `CREDENTIALS_PATH` (Path to OAuth JSON) - triggers interactive flow if token is missing/expired
-4.  **Application Default Credentials (ADC)** - automatic fallback
-
-**Environment Variable Summary:**
-
-| Variable                         | Method(s)                   | Description                                                      | Default            |
-|:---------------------------------|:----------------------------|:-----------------------------------------------------------------|:-------------------|
-| `SERVICE_ACCOUNT_PATH`           | Service Account             | Path to the Service Account JSON key file (MCP server specific). | -                  |
-| `GOOGLE_APPLICATION_CREDENTIALS` | ADC                         | Path to service account key (Google's standard variable).        | -                  |
-| `DRIVE_FOLDER_ID`                | Service Account             | ID of the Google Drive folder shared with the Service Account.   | -                  |
-| `CREDENTIALS_PATH`               | OAuth 2.0                   | Path to the OAuth 2.0 Client ID JSON file.                       | `credentials.json` |
-| `TOKEN_PATH`                     | OAuth 2.0                   | Path to store the generated OAuth token.                         | `token.json`       |
-| `CREDENTIALS_CONFIG`             | Service Account / OAuth 2.0 | Base64 encoded JSON string of credentials content.               | -                  |
-
----
-
-## ⚙️ Running the Server (Detailed)
-
-_Refer to the [ID Reference Guide](#-id-reference-guide) for more information about the IDs used below._
-
-### Method 1: Using `uvx` (Recommended for Users)
-
-As shown in the [Ultra Quick Start](#-ultra-quick-start-using-uvx), this is the easiest way. Set environment variables, then run:
+**1. Install and log in**
 
 ```bash
-uvx mcp-google-sheets@latest
+git clone https://github.com/raiderjoey/mcp-google-sheets.git
+cd mcp-google-sheets
+npm install
+npx wrangler login
 ```
-`uvx` handles fetching and running the package temporarily.
 
-### Method 2: For Development (Cloning the Repo)
-
-If you want to modify the code:
-
-1.  **Clone:** `git clone https://github.com/yourusername/mcp-google-sheets.git && cd mcp-google-sheets` (Use actual URL)
-2.  **Set Environment Variables:** As described above.
-3.  **Run using `uv`:** (Uses the local code)
-    ```bash
-    uv run mcp-google-sheets
-    # Or via the script name if defined in pyproject.toml, e.g.:
-    # uv run start
-    ```
-
-### Method 3: Docker (SSE transport)
-
-Run the server in a container using the included `Dockerfile`:
+**2. Set the secrets**
 
 ```bash
-# Build the image
-docker build -t mcp-google-sheets .
+# Pipe the service-account JSON key file in directly.
+npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON < service-account-key.json
 
-# Run (SSE on port 8000)
-# NOTE: Prefer CREDENTIALS_CONFIG (Base64 credentials content) in containers.
-docker run --rm -p 8000:8000 ^
-  -e HOST=0.0.0.0 ^
-  -e PORT=8000 ^
-  -e CREDENTIALS_CONFIG=YOUR_BASE64_CREDENTIALS ^
-  -e DRIVE_FOLDER_ID=YOUR_DRIVE_FOLDER_ID ^
-  mcp-google-sheets
+# Any long random string. MCP clients must send it as a bearer token.
+openssl rand -base64 32 | npx wrangler secret put MCP_AUTH_TOKEN
 ```
 
-- Use `CREDENTIALS_CONFIG` instead of `SERVICE_ACCOUNT_PATH` inside Docker to avoid mounting secrets as files.
-- The container starts with `--transport sse` and listens on `HOST`/`PORT`. Point your MCP client to `http://localhost:8000` using SSE transport.
+On Windows PowerShell:
+
+```powershell
+Get-Content service-account-key.json -Raw | npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON
+-join ((1..48) | ForEach-Object { [char](Get-Random -InputObject ([char[]]"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")) }) | npx wrangler secret put MCP_AUTH_TOKEN
+```
+
+The key can also be supplied base64-encoded (handy for CI variables or pasting into the Cloudflare dashboard): `base64 -w 0 service-account-key.json` on Linux, `base64 -i service-account-key.json` on macOS, or `[Convert]::ToBase64String([IO.File]::ReadAllBytes("service-account-key.json"))` in PowerShell. Avoid pasting credentials into online encoders.
+
+**3. Deploy**
+
+```bash
+npm run deploy
+```
+
+Wrangler prints your Worker URL, for example `https://mcp-google-sheets.<your-subdomain>.workers.dev`. The MCP endpoint is `/mcp` on that host.
+
+**4. Share a Drive folder with the service account**
+
+Create a folder in Google Drive, share it with the service account's email address (`...@...iam.gserviceaccount.com`) as an **Editor**, and optionally set that folder as the default with:
+
+```bash
+npx wrangler secret put DRIVE_FOLDER_ID   # or add it under "vars" in wrangler.jsonc
+```
+
+**5. Connect a client**
+
+See [Connecting MCP clients](#-connecting-mcp-clients).
 
 ---
 
-## 🔌 Usage with Claude Desktop
+## ☁️ Google Cloud setup
 
-Add the server config to `claude_desktop_config.json` under `mcpServers`. Choose the block matching your setup:
+1.  **Create or select a project** in the [Google Cloud Console](https://console.cloud.google.com/).
+2.  **Enable the APIs.** Go to **APIs & Services → Library** and enable both **Google Sheets API** and **Google Drive API**.
+3.  **Create a service account.** Go to **IAM & Admin → Service Accounts → Create service account**, name it (for example `mcp-sheets-service`), and click Done. No project roles are required: access is granted by sharing Drive items with the account.
+4.  **Create a key.** Open the account, choose **Keys → Add key → Create new key → JSON**, and download the file. Store it securely; it is the only credential the server uses.
+5.  **Create and share a Drive folder.** In [Google Drive](https://drive.google.com/) create a folder (for example "AI Managed Sheets"), note its ID from the URL, then **Share** it with the service account's email address (the `client_email` value in the key file) as **Editor**. Untick "Notify people".
+6.  **Point the server at the folder** by setting `DRIVE_FOLDER_ID` to that ID. Anything else the account needs must be shared with it the same way.
 
-_Refer to the [ID Reference Guide](#-id-reference-guide) for more information about the IDs used below._
+> **Service accounts and Drive storage.** A service account has no My Drive quota, so it cannot own new files in its own root. Always create spreadsheets inside a folder you own that is shared with the service account, or in a Shared Drive. `DRIVE_FOLDER_ID` makes that the default.
 
-**⚠️ Important Notes:**
-- **🍎 macOS Users:** use the full path: `"/Users/yourusername/.local/bin/uvx"` instead of just `"uvx"`
+---
 
-<details>
-<summary>🔵 Config: uvx + Service Account (Recommended)</summary>
+## 🔑 Configuration
+
+Secrets are set with `npx wrangler secret put <NAME>`. Plain variables can go under `vars` in `wrangler.jsonc` or also be set as secrets.
+
+| Name | Required | Description |
+| --- | --- | --- |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | yes | Service-account key file contents, either raw JSON or base64-encoded. `CREDENTIALS_CONFIG` is accepted as an alias for compatibility with the original server. |
+| `MCP_AUTH_TOKEN` | yes | Shared secret. Every request to the MCP endpoint must carry `Authorization: Bearer <token>`. The server refuses all requests if this is unset. |
+| `DRIVE_FOLDER_ID` | no | Default folder for `list_spreadsheets` and `create_spreadsheet`. |
+| `ENABLED_TOOLS` | no | Comma-separated allow-list of tool names, e.g. `get_sheet_data,update_cells`. Unset enables every tool. |
+| `MCP_PATH` | no | Path of the MCP endpoint. Defaults to `/mcp`. |
+| `MCP_ALLOWED_HOSTNAMES` | no | Comma-separated hostnames to accept in the `Host` header. Only needed when serving from a custom domain; `workers.dev` and localhost are allowed by default. |
+
+**Authentication model.** The Worker authenticates to Google as the service account by signing a JWT with WebCrypto and exchanging it for an access token, which is cached per isolate. The interactive OAuth flow, token files, and Application Default Credentials from the original server do not exist on Workers and are not supported.
+
+---
+
+## 🔌 Connecting MCP clients
+
+Replace `https://mcp-google-sheets.example.workers.dev` with your Worker URL and `<token>` with your `MCP_AUTH_TOKEN`.
+
+**Claude Code**
+
+```bash
+claude mcp add --transport http google-sheets https://mcp-google-sheets.example.workers.dev/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+**Clients that support remote servers with custom headers** (Cursor, Windsurf, VS Code, and similar). Add an entry like:
 
 ```json
 {
   "mcpServers": {
     "google-sheets": {
-      "command": "uvx",
-      "args": ["mcp-google-sheets@latest"],
-      "env": {
-        "SERVICE_ACCOUNT_PATH": "/full/path/to/your/service-account-key.json",
-        "DRIVE_FOLDER_ID": "your_shared_folder_id_here"
-      }
+      "type": "http",
+      "url": "https://mcp-google-sheets.example.workers.dev/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
     }
   }
 }
 ```
 
-**🍎 macOS Note:** If you get a `spawn uvx ENOENT` error, use the full path to `uvx`:
-```json
-{
-  "mcpServers": {
-    "google-sheets": {
-      "command": "/Users/yourusername/.local/bin/uvx",
-      "args": ["mcp-google-sheets@latest"],
-      "env": {
-        "SERVICE_ACCOUNT_PATH": "/full/path/to/your/service-account-key.json",
-        "DRIVE_FOLDER_ID": "your_shared_folder_id_here"
-      }
-    }
-  }
-}
-```
-*Replace `yourusername` with your actual username.*
-</details>
-
-<details>
-<summary>🔵 Config: uvx + OAuth 2.0</summary>
+**Clients that only speak stdio** (Claude Desktop's `claude_desktop_config.json`). Bridge with [`mcp-remote`](https://github.com/geelen/mcp-remote):
 
 ```json
 {
   "mcpServers": {
     "google-sheets": {
-      "command": "uvx",
-      "args": ["mcp-google-sheets@latest"],
-      "env": {
-        "CREDENTIALS_PATH": "/full/path/to/your/credentials.json",
-        "TOKEN_PATH": "/full/path/to/your/token.json"
-      }
-    }
-  }
-}
-```
-*Note: A browser may open for Google login on first use. Ensure TOKEN_PATH is writable.*
-
-**🍎 macOS Note:** If you get a `spawn uvx ENOENT` error, replace `"command": "uvx"` with `"command": "/Users/yourusername/.local/bin/uvx"` (replace `yourusername` with your actual username).
-</details>
-
-<details>
-<summary>🔵 Config: uvx + CREDENTIALS_CONFIG (Service Account Example)</summary>
-
-```json
-{
-  "mcpServers": {
-    "google-sheets": {
-      "command": "uvx",
-      "args": ["mcp-google-sheets@latest"],
-      "env": {
-        "CREDENTIALS_CONFIG": "ewogICJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsCiAgInByb2plY3RfaWQiOiAi...",
-        "DRIVE_FOLDER_ID": "your_shared_folder_id_here"
-      }
-    }
-  }
-}
-```
-*Note: Paste the full Base64 string for CREDENTIALS_CONFIG. DRIVE_FOLDER_ID is still needed for Service Account folder context.*
-
-**🍎 macOS Note:** If you get a `spawn uvx ENOENT` error, replace `"command": "uvx"` with `"command": "/Users/yourusername/.local/bin/uvx"` (replace `yourusername` with your actual username).
-</details>
-
-<details>
-<summary>🔵 Config: uvx + Application Default Credentials (ADC)</summary>
-
-**Option 1: With GOOGLE_APPLICATION_CREDENTIALS**
-```json
-{
-  "mcpServers": {
-    "google-sheets": {
-      "command": "uvx",
-      "args": ["mcp-google-sheets@latest"],
-      "env": {
-        "GOOGLE_APPLICATION_CREDENTIALS": "/path/to/service-account.json"
-      }
-    }
-  }
-}
-```
-
-**Option 2: With gcloud auth (no env vars needed)**
-```json
-{
-  "mcpServers": {
-    "google-sheets": {
-      "command": "uvx",
-      "args": ["mcp-google-sheets@latest"],
-      "env": {}
-    }
-  }
-}
-```
-*Prerequisites:* 
-1. *Run `gcloud auth application-default login --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/drive` first.*
-2. *Set quota project: `gcloud auth application-default set-quota-project <project_id>`*
-
-**🍎 macOS Note:** If you get a `spawn uvx ENOENT` error, replace `"command": "uvx"` with `"command": "/Users/yourusername/.local/bin/uvx"` (replace `yourusername` with your actual username).
-</details>
-
-<details>
-<summary>🟡 Config: Development (Running from cloned repo)</summary>
-
-```json
-{
-  "mcpServers": {
-    "mcp-google-sheets-local": {
-      "command": "uv",
+      "command": "npx",
       "args": [
-        "run",
-        "--directory",
-        "/path/to/your/mcp-google-sheets",
-        "mcp-google-sheets"
+        "-y", "mcp-remote",
+        "https://mcp-google-sheets.example.workers.dev/mcp",
+        "--header", "Authorization: Bearer ${SHEETS_MCP_TOKEN}"
       ],
-      "env": {
-        "SERVICE_ACCOUNT_PATH": "/path/to/your/mcp-google-sheets/service_account.json",
-        "DRIVE_FOLDER_ID": "your_drive_folder_id_here"
-      }
+      "env": { "SHEETS_MCP_TOKEN": "<token>" }
     }
   }
 }
 ```
-*Note: Use `--directory` flag to specify the project path, and adjust paths to match your actual workspace location.*
-</details>
+
+> Claude.ai's web **Custom connectors** expect OAuth rather than a static bearer token, so they cannot connect directly yet. Adding an OAuth layer on top of this server is possible with Cloudflare's `workers-oauth-provider` but is not included.
 
 ---
 
-## 💬 Example Prompts for Claude
+## 🎯 Tool filtering (reduce context usage)
 
-Once connected, try prompts like:
+Set `ENABLED_TOOLS` to a comma-separated list of tool names to register only those tools. This keeps the tool list small for clients with limited context.
 
-*   "List all spreadsheets I have access to." (or "in my AI Managed Sheets folder")
-*   "Create a new spreadsheet titled 'Quarterly Sales Report Q3 2024'."
+```bash
+npx wrangler secret put ENABLED_TOOLS   # e.g. get_sheet_data,update_cells,list_spreadsheets
+```
+
+By default all 20 tools are registered, which costs roughly 13K tokens of context before the conversation starts. A common minimal subset:
+
+```
+get_sheet_data,update_cells,list_spreadsheets,list_sheets
+```
+
+All tool names, for copy and paste:
+
+```
+add_chart, add_columns, add_rows, batch_update, batch_update_cells, copy_sheet, create_sheet,
+create_spreadsheet, find_in_spreadsheet, get_multiple_sheet_data, get_multiple_spreadsheet_summary,
+get_sheet_data, get_sheet_formulas, list_folders, list_sheets, list_spreadsheets, rename_sheet,
+search_spreadsheets, share_spreadsheet, update_cells
+```
+
+Whitespace around names is ignored. If `ENABLED_TOOLS` is unset or empty, every tool is enabled.
+
+---
+
+## 🛠️ Available tools and resources
+
+_Refer to the [ID Reference Guide](#-id-reference-guide) for more information about the IDs used below._
+
+*(Input parameters are strings unless otherwise specified.)*
+
+*   **`list_spreadsheets`**: Lists spreadsheets in a Drive folder.
+    *   `folder_id` (optional): Folder ID to search in. If omitted, uses `DRIVE_FOLDER_ID` or lists everything the service account can access.
+    *   _Returns:_ `[{id, title}]`
+*   **`create_spreadsheet`**: Creates a new spreadsheet.
+    *   `title`: Title for the spreadsheet.
+    *   `folder_id` (optional): Folder to create it in. Defaults to `DRIVE_FOLDER_ID`, then root.
+    *   _Returns:_ `{spreadsheetId, title, folder}`
+*   **`get_sheet_data`**: Reads data from a range in a sheet/tab.
+    *   `spreadsheet_id`, `sheet`, `range` (optional A1 notation, e.g. `A1:C10`).
+    *   `include_grid_data` (optional boolean, default `false`): Return full grid data with formatting (much larger).
+    *   _Returns:_ Values result `{spreadsheetId, valueRanges: [{range, values}]}`, or the full [`spreadsheets.get`](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/get#response-body) response when `include_grid_data` is `true`.
+*   **`get_sheet_formulas`**: Reads formulas from a range.
+    *   `spreadsheet_id`, `sheet`, `range` (optional).
+    *   _Returns:_ 2D array of formulas.
+*   **`update_cells`**: Writes a 2D array to a range. Overwrites existing data.
+    *   `spreadsheet_id`, `sheet`, `range`, `data` (array of arrays, e.g. `[[1, 2, 3], ["a", "b", "c"]]`).
+    *   _Returns:_ [`values.update`](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/update#response-body) response.
+*   **`batch_update_cells`**: Updates several ranges in one call.
+    *   `spreadsheet_id`, `sheet`, `ranges` (object mapping A1 ranges to 2D arrays, e.g. `{"A1:B2": [[1, 2], [3, 4]], "D5": [["Hello"]]}`).
+    *   _Returns:_ [`values.batchUpdate`](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets.values/batchUpdate#response-body) response.
+*   **`add_rows`**: Inserts empty rows.
+    *   `spreadsheet_id`, `sheet`, `count` (integer), `start_row` (optional integer, 0-based, default `0`).
+*   **`add_columns`**: Inserts empty columns.
+    *   `spreadsheet_id`, `sheet`, `count` (integer), `start_column` (optional integer, 0-based, default `0`).
+*   **`list_sheets`**: Lists sheet/tab names in a spreadsheet.
+    *   `spreadsheet_id`.
+    *   _Returns:_ `["Sheet1", "Sheet2"]`
+*   **`create_sheet`**: Adds a new sheet/tab.
+    *   `spreadsheet_id`, `title`.
+    *   _Returns:_ `{sheetId, title, index, spreadsheetId}`
+*   **`copy_sheet`**: Copies a sheet/tab to another spreadsheet and renames it.
+    *   `src_spreadsheet`, `src_sheet`, `dst_spreadsheet`, `dst_sheet`.
+*   **`rename_sheet`**: Renames a sheet/tab.
+    *   `spreadsheet`, `sheet`, `new_name`.
+*   **`get_multiple_sheet_data`**: Fetches several ranges, possibly across spreadsheets, in one call.
+    *   `queries`: array of `{spreadsheet_id, sheet, range}`.
+    *   _Returns:_ Each query with `data` or `error`.
+*   **`get_multiple_spreadsheet_summary`**: Titles, sheet names, headers, and first rows of several spreadsheets.
+    *   `spreadsheet_ids` (array of strings), `rows_to_fetch` (optional integer, default `5`).
+*   **`share_spreadsheet`**: Shares a spreadsheet with users.
+    *   `spreadsheet_id`, `recipients` (array of `{email_address, role}` where role is `reader`, `commenter`, or `writer`), `send_notification` (optional boolean, default `true`).
+    *   _Returns:_ `{successes, failures}`
+*   **`list_folders`**: Lists folders in a Drive folder.
+    *   `parent_folder_id` (optional): Defaults to the root of My Drive.
+    *   _Returns:_ `[{id, name, parent}]`
+*   **`search_spreadsheets`**: Searches Drive for spreadsheets by name or content.
+    *   `query`, `max_results` (optional integer, default `20`, max `100`).
+    *   _Returns:_ `[{id, name, created_time, modified_time, owners, web_link}]`
+*   **`find_in_spreadsheet`**: Finds cells containing text.
+    *   `spreadsheet_id`, `query`, `sheet` (optional), `case_sensitive` (optional boolean, default `false`), `max_results` (optional integer, default `50`).
+    *   _Returns:_ `[{sheet, cell, value}]`
+*   **`batch_update`**: Runs arbitrary [`spreadsheets.batchUpdate`](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/batchUpdate) requests (formatting, borders, conditional formats, dimension changes, and more).
+    *   `spreadsheet_id`, `requests` (array of request objects).
+*   **`add_chart`**: Adds a floating chart from a data range.
+    *   `spreadsheet_id`, `sheet`, `chart_type` (`COLUMN`, `BAR`, `LINE`, `AREA`, `PIE`, `SCATTER`, `COMBO`, `HISTOGRAM`), `data_range` (A1 notation, first row treated as headers).
+    *   `title`, `x_axis_label`, `y_axis_label` (optional), `position_x`, `position_y` (optional integers, default `0`), `width`, `height` (optional integers, default `600` × `400`).
+    *   _Returns:_ `{success, message, chartId, result}`
+
+**MCP resources**
+
+*   **`spreadsheet://{spreadsheet_id}/info`**: Basic metadata about a spreadsheet as JSON (title and sheets).
+
+---
+
+## 🧪 Local development and testing
+
+```bash
+cp .dev.vars.example .dev.vars   # fill in a service-account key and a token
+npm run dev                      # http://localhost:8787
+```
+
+Smoke test the running server:
+
+```bash
+curl http://localhost:8787/                       # health check, no auth
+curl -X POST http://localhost:8787/mcp \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+To point an MCP client at the local server while developing, use `http://localhost:8787/mcp` with the token from `.dev.vars`, for example:
+
+```bash
+claude mcp add --transport http google-sheets-local http://localhost:8787/mcp \
+  --header "Authorization: Bearer <token from .dev.vars>"
+```
+
+Tests run inside the Workers runtime with Vitest and need no Google credentials:
+
+```bash
+npm run typecheck
+npm test
+```
+
+The live integration test creates and deletes spreadsheets in a disposable folder and exercises every tool against Google:
+
+```bash
+RUN_GOOGLE_INTEGRATION=1 \
+DRIVE_FOLDER_ID=<disposable folder id> \
+GOOGLE_SERVICE_ACCOUNT_JSON="$(cat service-account.json)" \
+npm run test:integration
+```
+
+Set `GOOGLE_TEST_SHARE_EMAIL` to also exercise a real share call.
+
+---
+
+## 🚢 Deploying from GitHub Actions
+
+`.github/workflows/deploy.yml` deploys on every push to `main` after the unit tests pass. Add these repository secrets:
+
+*   `CLOUDFLARE_API_TOKEN`: an API token with the **Workers Scripts: Edit** permission.
+*   `CLOUDFLARE_ACCOUNT_ID`: your account ID from the Cloudflare dashboard.
+
+Worker secrets (`GOOGLE_SERVICE_ACCOUNT_JSON`, `MCP_AUTH_TOKEN`) are set once with `wrangler secret put` and persist across deploys.
+
+To gate deploys on the live Google tests, set the repository variable `RUN_LIVE_TESTS_BEFORE_DEPLOY` to `true` and add the Google secrets used by `.github/workflows/google-integration.yml` (`GOOGLE_DRIVE_FOLDER_ID` plus `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_CREDENTIALS_CONFIG`).
+
+---
+
+## 🔒 Security notes
+
+*   The endpoint fails closed: with no `MCP_AUTH_TOKEN` configured it answers `503`, and a missing or wrong token answers `401`. Token comparison is constant-time.
+*   The service account can only reach files explicitly shared with it. Share single folders rather than your whole Drive.
+*   The health check at `/` needs no token and reveals only the server name and version.
+*   For extra protection put the Worker behind [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) or restrict it to a custom domain with `MCP_ALLOWED_HOSTNAMES`.
+
+---
+
+## 🔁 Differences from the original Python server
+
+*   Transport is Streamable HTTP only. There is no stdio or SSE mode.
+*   Authentication is service account only. OAuth, token files, and Application Default Credentials are not available on Workers.
+*   Configuration comes from Worker secrets and vars, not command-line flags or key files on disk.
+*   Drive search queries escape quotes and backslashes in the search text.
+*   Sheet lookups request only the fields they need, which reduces response size without changing results.
+
+---
+
+## 💬 Example prompts
+
+*   "List all spreadsheets in my AI Managed Sheets folder."
+*   "Create a new spreadsheet titled 'Quarterly Sales Report Q3'."
 *   "In the 'Quarterly Sales Report' spreadsheet, get the data from Sheet1 range A1 to E10."
 *   "Add a new sheet named 'Summary' to the spreadsheet with ID `1aBcDeFgHiJkLmNoPqRsTuVwXyZ`."
 *   "In my 'Project Tasks' spreadsheet, Sheet 'Tasks', update cell B2 to 'In Progress'."
-*   "Append these rows to the 'Log' sheet in spreadsheet `XYZ`: `[['2024-07-31', 'Task A Completed'], ['2024-08-01', 'Task B Started']]`"
 *   "Get a summary of the spreadsheets 'Sales Data' and 'Inventory Count'."
-*   "Share the 'Team Vacation Schedule' spreadsheet with `team@example.com` as a reader and `manager@example.com` as a writer. Don't send notifications."
-*   "Create a column chart in my 'Sales Report' spreadsheet showing monthly revenue from data in range A1:B13."
-*   "Add a pie chart to the 'Market Analysis' sheet with data from A1:B5 titled 'Market Share by Product'."
-*   "In spreadsheet `abc123`, create a line chart on Sheet1 from range A1:C10 with title 'Growth Trends' and labels 'Month' and 'Revenue'."
+*   "Share the 'Team Vacation Schedule' spreadsheet with `team@example.com` as a reader. Don't send notifications."
+*   "Create a column chart in my 'Sales Report' spreadsheet showing monthly revenue from range A1:B13."
 
 ---
 
 ## 🆔 ID Reference Guide
-
-Use the following reference guide to find the various IDs referenced throughout the docs:
 
 ```
 Google Cloud Project ID:
@@ -632,18 +371,13 @@ Google Sheets Spreadsheet ID:
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please open an issue to discuss bugs or feature requests. Pull requests are appreciated.
-
----
+Contributions are welcome. Please open an issue to discuss bugs or feature requests. New tools must add unit coverage and be added to the live integration test.
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
+MIT. See [LICENSE](LICENSE).
 
 ## 🙏 Credits
 
-*   Built with [FastMCP](https://github.com/cognitiveapis/fastmcp).
-*   Inspired by [kazz187/mcp-google-spreadsheet](https://github.com/kazz187/mcp-google-spreadsheet).
-*   Uses Google API Python Client libraries.
+*   Original server: [xing5/mcp-google-sheets](https://github.com/xing5/mcp-google-sheets) by Xing Wu.
+*   Built with the [Cloudflare Agents SDK](https://developers.cloudflare.com/agents/) and the [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk).

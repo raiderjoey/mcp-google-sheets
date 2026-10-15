@@ -1,0 +1,77 @@
+name: Deploy
+
+# Deploys the Worker to Cloudflare on every push to main (and on demand).
+#
+# Required repository secrets:
+#   CLOUDFLARE_API_TOKEN    API token with "Workers Scripts: Edit" permission.
+#   CLOUDFLARE_ACCOUNT_ID   Your Cloudflare account ID.
+#
+# Worker secrets (GOOGLE_SERVICE_ACCOUNT_JSON, MCP_AUTH_TOKEN) are set once with
+# `wrangler secret put` and are not managed by this workflow.
+#
+# Optional: set the repository variable RUN_LIVE_TESTS_BEFORE_DEPLOY to "true"
+# to gate deploys on the live Google integration tests (needs the Google
+# secrets from google-integration.yml).
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  unit:
+    name: Typecheck and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  live-google-integration:
+    name: Live Google integration tests
+    runs-on: ubuntu-latest
+    needs: unit
+    if: vars.RUN_LIVE_TESTS_BEFORE_DEPLOY == 'true'
+    env:
+      RUN_GOOGLE_INTEGRATION: "1"
+      DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+      CREDENTIALS_CONFIG: ${{ secrets.GOOGLE_CREDENTIALS_CONFIG }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      GOOGLE_TEST_SHARE_EMAIL: ${{ secrets.GOOGLE_TEST_SHARE_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:integration
+
+  deploy:
+    name: Deploy to Cloudflare Workers
+    runs-on: ubuntu-latest
+    needs: [unit, live-google-integration]
+    if: always() && needs.unit.result == 'success' && (needs.live-google-integration.result == 'success' || needs.live-google-integration.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
