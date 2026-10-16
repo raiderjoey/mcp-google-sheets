@@ -1,29 +1,37 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "mcp-google-sheets",
-  "main": "src/index.ts",
-  "compatibility_date": "2026-09-01",
-  "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
-  // Non-secret configuration. Override per environment or with `wrangler secret put`.
-  //
-  // Secrets (set with `npx wrangler secret put <NAME>`, never commit them):
-  //   GOOGLE_SERVICE_ACCOUNT_JSON  Service-account key JSON (raw or base64). CREDENTIALS_CONFIG is accepted as an alias.
-  //   MCP_AUTH_TOKEN               Static bearer token for Claude Code / mcp-remote (OAuth clients don't need it).
-  //   GOOGLE_OAUTH_CLIENT_ID       Google OAuth client (Web application) used to sign the owner in at /authorize.
-  //   GOOGLE_OAUTH_CLIENT_SECRET   Its client secret.
-  //   ALLOWED_EMAIL                The only Google account allowed to finish /authorize.
-  //
-  // Optional vars:
-  //   DRIVE_FOLDER_ID              Default Drive folder for list/create operations.
-  //   ENABLED_TOOLS                Comma-separated allow-list of tool names.
-  //   MCP_ALLOWED_HOSTNAMES        Comma-separated hostnames when serving from a custom domain.
-  "vars": {
-    "MCP_PATH": "/mcp"
-  },
-  // OAuth clients, grants and tokens. Create it with
-  // `npx wrangler kv namespace create OAUTH_KV` and paste the id here.
-  "kv_namespaces": [
-    { "binding": "OAUTH_KV", "id": "REPLACE_WITH_OAUTH_KV_NAMESPACE_ID" }
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "mcp-google-sheets",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-01",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"observability": {
+		"enabled": true
+	},
+	// Non-secret configuration. Override per environment or with `wrangler secret put`.
+	//
+	// Secrets (set with `npx wrangler secret put <NAME>`, never commit them):
+	//   GOOGLE_SERVICE_ACCOUNT_JSON  Service-account key JSON (raw or base64). CREDENTIALS_CONFIG is accepted as an alias.
+	//   MCP_AUTH_TOKEN               Static bearer token for Claude Code / mcp-remote (OAuth clients don't need it).
+	//   GOOGLE_OAUTH_CLIENT_ID       Google OAuth client (Web application) used to sign the owner in at /authorize.
+	//   GOOGLE_OAUTH_CLIENT_SECRET   Its client secret.
+	//   ALLOWED_EMAIL                The only Google account allowed to finish /authorize.
+	//
+	// Optional vars:
+	//   DRIVE_FOLDER_ID              Default Drive folder for list/create operations.
+	//   ENABLED_TOOLS                Comma-separated allow-list of tool names.
+	//   MCP_ALLOWED_HOSTNAMES        Comma-separated hostnames when serving from a custom domain.
+	"vars": {
+		"MCP_PATH": "/mcp"
+	},
+	// OAuth clients, grants and tokens. Create it with
+	// `npx wrangler kv namespace create OAUTH_KV` and paste the id here.
+	"kv_namespaces": [
+		{
+			"binding": "OAUTH_KV",
+			"id": "00ccb7f260bb438eb1f06a568684915c",
+			"remote": true
+		}
+	]
 }
