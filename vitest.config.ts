@@ -21,6 +21,9 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
+      // wrangler.jsonc marks OAUTH_KV as remote for `wrangler dev`; tests must
+      // never write to the production namespace, so keep every binding local.
+      remoteBindings: false,
       miniflare: { bindings: liveBindings },
     }),
   ],
