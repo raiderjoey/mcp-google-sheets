@@ -38,6 +38,8 @@ function idToken(claims: Record<string, unknown>): string {
 
 interface GoogleIdentity {
   email: string;
+  /** Replace Google's token response entirely (e.g. a non-JSON error page). */
+  rawTokenResponse?: () => Response;
   email_verified?: boolean;
   aud?: string;
   iss?: string;
@@ -50,6 +52,7 @@ function fakeGoogle(identity: GoogleIdentity, seen: { nonce?: string; exchanges:
       const body = new URLSearchParams(String(init?.body ?? ""));
       if (body.get("grant_type") === "authorization_code") {
         seen.exchanges.push(body);
+        if (identity.rawTokenResponse) return identity.rawTokenResponse();
         const now = Math.floor(Date.now() / 1000);
         return Response.json({
           access_token: "google-user-access-token",
@@ -110,8 +113,8 @@ async function pkce() {
   return { verifier, challenge };
 }
 
-function authorizeUrl(clientId: string, redirectUri: string, challenge: string) {
-  const url = new URL(`${ORIGIN}/authorize`);
+function authorizeUrl(clientId: string, redirectUri: string, challenge: string, origin = ORIGIN) {
+  const url = new URL(`${origin}/authorize`);
   url.search = new URLSearchParams({
     response_type: "code",
     client_id: clientId,
@@ -119,7 +122,7 @@ function authorizeUrl(clientId: string, redirectUri: string, challenge: string) 
     code_challenge: challenge,
     code_challenge_method: "S256",
     state: "client-state",
-    resource: `${ORIGIN}/mcp`,
+    resource: `${origin}/mcp`,
   }).toString();
   return url.toString();
 }
@@ -224,8 +227,11 @@ describe("authorization", () => {
     expect(page).toContain("Claude");
     expect(page).toContain("claude.ai");
 
-    // Google is asked for the owner's identity only, with PKCE and a nonce.
+    // Google is asked for the owner's identity only, with PKCE and a nonce,
+    // and the redirect does not reveal which account is allowed.
     expect(google.searchParams.get("client_id")).toBe(baseEnv.GOOGLE_OAUTH_CLIENT_ID);
+    expect(google.searchParams.has("login_hint")).toBe(false);
+    expect(google.toString()).not.toContain(encodeURIComponent(OWNER));
     expect(google.searchParams.get("redirect_uri")).toBe(`${ORIGIN}/callback`);
     expect(google.searchParams.get("scope")).toBe("openid email");
     expect(google.searchParams.get("code_challenge_method")).toBe("S256");
@@ -286,6 +292,35 @@ describe("authorization", () => {
     const { challenge } = await pkce();
     const { callback } = await authorizeAs({ email: OWNER, aud: "someone-elses-client" }, client.client_id, challenge);
     expect(new URL(callback.headers.get("location")!).searchParams.get("error")).toBe("access_denied");
+  });
+
+  it("treats a non-JSON answer from Google's token endpoint as a refused sign-in", async () => {
+    const client = (await (await register([CLAUDE_CALLBACK])).json()) as { client_id: string };
+    const { challenge } = await pkce();
+    const { callback } = await authorizeAs(
+      { email: OWNER, rawTokenResponse: () => new Response("<html>oops</html>", { headers: { "content-type": "text/html" } }) },
+      client.client_id,
+      challenge,
+    );
+    expect(callback.status).toBe(302);
+    expect(new URL(callback.headers.get("location")!).searchParams.get("error")).toBe("access_denied");
+  });
+
+  it("serves /authorize on a second hostname after a first one through the same env", async () => {
+    // Workers reuse one env object across requests in an isolate; each request
+    // must still get helpers bound to its own origin's resource.
+    const env = { ...baseEnv };
+    const client = (await (await register([CLAUDE_CALLBACK])).json()) as { client_id: string };
+    const { challenge } = await pkce();
+    const first = await run(new Request(authorizeUrl(client.client_id, CLAUDE_CALLBACK, challenge, "http://localhost")), env);
+    expect(first.status).toBe(200);
+    const second = await run(new Request(authorizeUrl(client.client_id, CLAUDE_CALLBACK, challenge, "http://127.0.0.1")), env);
+    expect(second.status).toBe(200);
+  });
+
+  it("refuses plain http on a public hostname with a 400 instead of crashing", async () => {
+    const response = await run(new Request("http://mcp.example.com/.well-known/oauth-authorization-server"));
+    expect(response.status).toBe(400);
   });
 
   it("refuses at /authorize a client whose redirect URI is outside the allowlist, without redirecting", async () => {

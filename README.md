@@ -53,6 +53,7 @@ npx wrangler login
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON < service-account-key.json
 
 # Any long random string. Claude Code and mcp-remote send it as a bearer token.
+# Avoid colons: a value shaped like an issued OAuth token (a:b:c) is never matched.
 openssl rand -base64 32 | npx wrangler secret put MCP_AUTH_TOKEN
 
 # OAuth sign-in for claude.ai connectors (see "Google sign-in for OAuth" below).
@@ -355,6 +356,8 @@ To gate deploys on the live Google tests, set the repository variable `RUN_LIVE_
 
 *   The endpoint fails closed: a static token with no `MCP_AUTH_TOKEN` configured answers `503`, and a missing or wrong token answers `401` with a `WWW-Authenticate` challenge pointing at `/.well-known/oauth-protected-resource/mcp`. Static-token comparison is constant-time.
 *   Anyone can register an OAuth client, but only with claude.ai's callback or a loopback redirect URI, and nobody but `ALLOWED_EMAIL` (with a Google-verified address) can finish `/authorize`. The consent page names the client and the redirect host, cannot be framed, and is bound to the browser with a single-use handle and `__Host-` cookie.
+*   The consent page is the only defence against someone who starts a connector flow in *their* claude.ai account and sends you the `/authorize` link: if you click Allow and sign in, their connector gets access. Only approve a page you opened yourself by clicking Connect.
+*   `/register` and `/authorize` write to KV without authentication. Add a Cloudflare rate-limiting rule on those paths if you see abuse (the KV free tier allows 1,000 writes a day).
 *   Whoever completes `/authorize` gets edit access to everything shared with the service account. To revoke OAuth access, delete the grant's keys from the `OAUTH_KV` namespace, or rotate by emptying the namespace.
 *   The service account can only reach files explicitly shared with it. Share single folders rather than your whole Drive.
 *   The health check at `/` needs no token and reveals only the server name and version. CORS preflight (`OPTIONS`) requests are also answered without a token, since they carry no credentials and return no data; this is what lets browser-hosted MCP clients connect.

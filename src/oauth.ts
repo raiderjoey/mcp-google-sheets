@@ -24,7 +24,7 @@ export const CLAUDE_CONNECTOR_CALLBACK = "https://claude.ai/api/mcp/auth_callbac
 const GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+export const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 export const CALLBACK_PATH = "/callback";
 
@@ -84,9 +84,9 @@ function consentPage(details: ConsentDescription, handle: string): string {
   const origin = details.clientDomain
     ? `Published by <strong>${escapeHtml(details.clientDomain)}</strong>.`
     : "This app registered itself; its name is not verified.";
-  const loopback = details.redirectIsLoopback
+  const warning = details.redirectIsLoopback
     ? "<p><strong>This sends access to an app on this computer.</strong> Continue only if you just started signing in from it.</p>"
-    : "";
+    : "<p><strong>Continue only if you opened this page yourself, moments ago, by clicking Connect in your own Claude account.</strong> A link someone sent you could connect this server to <em>their</em> account.</p>";
   return `<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -101,7 +101,7 @@ function consentPage(details: ConsentDescription, handle: string): string {
 <p>${origin}</p>
 <p>It will be able to read and edit every spreadsheet shared with this server's service account.</p>
 <p>Access will be sent to <strong>${escapeHtml(details.redirectHost)}</strong><br><code>${escapeHtml(details.redirectUri)}</code></p>
-${loopback}
+${warning}
 <p>You'll sign in with Google next; only the owner's account is accepted.</p>
 <form method="post">
   <input type="hidden" name="handle" value="${escapeHtml(handle)}">
@@ -171,7 +171,13 @@ async function signedInEmail(
     console.error(`Google code exchange failed with HTTP ${response.status}`);
     return null;
   }
-  const body = (await response.json()) as { id_token?: unknown };
+  let body: { id_token?: unknown };
+  try {
+    body = (await response.json()) as { id_token?: unknown };
+  } catch {
+    console.error("Google code exchange returned a non-JSON body");
+    return null;
+  }
   const claims = typeof body.id_token === "string" ? decodeJwtPayload(body.id_token) : null;
   if (!claims) return null;
   const now = Math.floor(Date.now() / 1000);
@@ -226,7 +232,6 @@ async function submitConsent(oauth: OAuthHelpers, request: Request, config: Goog
     nonce: data.nonce,
     code_challenge: await s256(data.verifier),
     code_challenge_method: "S256",
-    login_hint: config.allowedEmail,
     prompt: "select_account",
   }).toString();
   return redirect(google.toString(), headers);

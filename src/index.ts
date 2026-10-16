@@ -15,7 +15,7 @@ import { createMcpHandler } from "agents/mcp/server";
 import { parseEnabledTools, parseHostnames, type Env } from "./env";
 import { errorMessage, parseServiceAccount, ServiceAccountTokenProvider, type FetchLike } from "./google/auth";
 import { GoogleClient } from "./google/client";
-import { checkClientRegistration, handleAuthorization } from "./oauth";
+import { checkClientRegistration, handleAuthorization, LOOPBACK_HOSTS } from "./oauth";
 import { createServer, SERVER_NAME, SERVER_VERSION } from "./server";
 
 const DEFAULT_MCP_PATH = "/mcp";
@@ -139,13 +139,21 @@ export async function handleRequest(
   if (url.pathname === "/" || url.pathname === "/health") {
     return json({ status: "ok", server: SERVER_NAME, version: SERVER_VERSION, endpoint: mcpPath });
   }
+  // OAuth resources must be https except on loopback; refuse rather than crash.
+  if (url.protocol !== "https:" && !LOOPBACK_HOSTS.has(url.hostname)) {
+    return json({ error: "HTTPS is required" }, 400);
+  }
   if (!env.OAUTH_KV) {
     console.error("OAUTH_KV binding is not configured; refusing request");
     return json({ error: "Server is not configured: OAUTH_KV binding is missing" }, 503);
   }
 
   try {
-    return await new OAuthProvider<Env>(oauthOptions(env, url, options)).fetch(request, env, ctx);
+    // The library caches its helpers on env.OAUTH_PROVIDER, and Workers reuse
+    // one env object across requests in an isolate. Hand it a per-request copy
+    // so the helpers are bound to this request's origin.
+    const requestEnv: Env = { ...env, OAUTH_PROVIDER: undefined };
+    return await new OAuthProvider<Env>(oauthOptions(env, url, options)).fetch(request, requestEnv, ctx);
   } catch (error) {
     if (error instanceof ConfigurationError) {
       return json({ error: `Server is not configured: ${error.message}` }, 503);

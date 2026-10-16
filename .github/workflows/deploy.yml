@@ -6,8 +6,10 @@ name: Deploy
 #   CLOUDFLARE_API_TOKEN    API token with "Workers Scripts: Edit" permission.
 #   CLOUDFLARE_ACCOUNT_ID   Your Cloudflare account ID.
 #
-# Worker secrets (GOOGLE_SERVICE_ACCOUNT_JSON, MCP_AUTH_TOKEN) are set once with
-# `wrangler secret put` and are not managed by this workflow.
+# Worker secrets (GOOGLE_SERVICE_ACCOUNT_JSON, MCP_AUTH_TOKEN, GOOGLE_OAUTH_CLIENT_ID,
+# GOOGLE_OAUTH_CLIENT_SECRET, ALLOWED_EMAIL) are set once with `wrangler secret put`
+# and are not managed by this workflow. The OAUTH_KV namespace id must be committed
+# in wrangler.jsonc before merging, or the deploy fails.
 #
 # Optional: set the repository variable RUN_LIVE_TESTS_BEFORE_DEPLOY to "true"
 # to gate deploys on the live Google integration tests (needs the Google
