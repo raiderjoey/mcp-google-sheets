@@ -35,13 +35,26 @@ gitignored; tsconfig references it, so run typecheck (not bare `tsc`) after chan
 
 Request flow, one Worker request at a time:
 
-1. `src/index.ts` routes `/` (health, no auth) and `MCP_PATH` (default `/mcp`). For every
-   method except `OPTIONS` it checks the bearer token (SHA-256 then `timingSafeEqual`) and
-   fails closed with 503 when `MCP_AUTH_TOKEN` or the service-account secret is missing.
-   `OPTIONS` (CORS preflight) skips both checks and is answered by the handler. The
-   stateless handler from `createMcpHandler` (`agents/mcp/server`) is created per request
-   because the factory needs `env`; the SDK's factory signature does not receive it. The
+1. `src/index.ts` answers `/` and `/health` (no auth), returns 503 when the `OAUTH_KV`
+   binding is missing, and hands everything else to an `OAuthProvider`
+   (`@cloudflare/workers-oauth-provider` 1.x) built per request by `oauthOptions(env, url)`.
+   It is built per request because the protected resource (`<request origin><MCP_PATH>`)
+   must be an absolute URL and differs between workers.dev, custom domains and localhost.
+   The provider serves the `.well-known` metadata, `/register` (DCR, gated by
+   `checkClientRegistration`), `/token` and CORS preflights itself, validates OAuth access
+   tokens on `MCP_PATH`, and sends tokens it did not issue to `resolveStaticToken`, which
+   compares against `MCP_AUTH_TOKEN` (SHA-256 then `timingSafeEqual`) and throws
+   `ConfigurationError` (answered 503) when it is unset. The 401 challenge with
+   `resource_metadata` comes from the provider. `serveMcp` then fails closed with 503 on a
+   missing service-account secret and creates the stateless `createMcpHandler`
+   (`agents/mcp/server`) handler per request, because the factory needs `env`; the
    `McpServer` is built once per request, inside the factory.
+   `src/oauth.ts` is the provider's default handler for `/authorize` and `/callback`: a
+   consent page (library `beginConsent`/`approveConsent`, browser-bound handle), then Google
+   sign-in (`beginUpstream`/`finishUpstream`, PKCE + nonce), then `completeAuthorization`
+   only if the ID token's verified `email` equals `ALLOWED_EMAIL`. Redirect URIs are
+   limited by `isAllowedRedirectUri` (claude.ai's connector callback exactly, or http
+   loopback) at both registration and authorize time.
 2. `src/server.ts` `createServer` registers every entry in `TOOLS` (filtered by
    `ENABLED_TOOLS`) plus the `spreadsheet://{spreadsheet_id}/info` resource. It is the only
    place that knows about MCP result framing: tool return values become one JSON text
@@ -75,6 +88,9 @@ is required.
   the helper sets it explicitly.
 - `test/worker.test.ts` exercises the real service-account signing path end to end: it
   generates an RSA key per run and serves the token endpoint from the fake.
+- `test/oauth.test.ts` drives the whole OAuth flow (DCR, consent, a fake Google token
+  endpoint returning an ID token, `/token`, then `/mcp`) with a small cookie jar, using the
+  test runtime's `OAUTH_KV`. Test envs must include `OAUTH_KV` from `cloudflare:test`.
 - Tool handlers are called through `tool.inputSchema.parse(args)` in tests so Zod defaults
   apply exactly as they do in production.
 
@@ -86,7 +102,8 @@ fails otherwise), and a bullet in the README tool list.
 ## Configuration
 
 Secrets (`wrangler secret put`): `GOOGLE_SERVICE_ACCOUNT_JSON` (alias `CREDENTIALS_CONFIG`),
-`MCP_AUTH_TOKEN`. Vars: `DRIVE_FOLDER_ID`, `ENABLED_TOOLS`, `MCP_PATH`,
+`MCP_AUTH_TOKEN`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `ALLOWED_EMAIL`.
+KV binding: `OAUTH_KV` (id in `wrangler.jsonc`). Vars: `DRIVE_FOLDER_ID`, `ENABLED_TOOLS`, `MCP_PATH`,
 `MCP_ALLOWED_HOSTNAMES`. `vitest.config.ts` forwards the live-test variables from the host
 environment into the test runtime as bindings; nothing else reads `process.env`.
 

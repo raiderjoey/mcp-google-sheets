@@ -1,8 +1,14 @@
 # Copy to .dev.vars for `npm run dev`. Never commit .dev.vars.
 # Service-account key JSON, either raw JSON on one line or base64-encoded.
 GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","client_email":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","token_uri":"https://oauth2.googleapis.com/token"}
-# Shared secret MCP clients must send as `Authorization: Bearer <token>`.
+# Static bearer token for Claude Code / mcp-remote (`Authorization: Bearer <token>`).
 MCP_AUTH_TOKEN=change-me
+# Google OAuth client (Web application) for signing the owner in at /authorize.
+# Add http://localhost:8787/callback as an authorized redirect URI for local dev.
+GOOGLE_OAUTH_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_OAUTH_CLIENT_SECRET=change-me
+# The only Google account allowed to authorize OAuth clients.
+ALLOWED_EMAIL=you@example.com
 # Optional: default Drive folder ID for list/create operations.
 DRIVE_FOLDER_ID=
 # Optional: comma-separated allow-list of tool names.

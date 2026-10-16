@@ -1,5 +1,16 @@
+import type { OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+
 /** Bindings the Worker reads. Secrets are set with `wrangler secret put`. */
 export interface Env {
+  /** KV namespace holding OAuth clients, grants and tokens. */
+  OAUTH_KV?: KVNamespace;
+  /** Injected by the OAuth provider into the default handler. */
+  OAUTH_PROVIDER?: OAuthHelpers;
+  /** Google OAuth client (Web application) used to sign the owner in at /authorize. */
+  GOOGLE_OAUTH_CLIENT_ID?: string;
+  GOOGLE_OAUTH_CLIENT_SECRET?: string;
+  /** The only Google account allowed to complete /authorize. */
+  ALLOWED_EMAIL?: string;
   /** Service-account key JSON, raw or base64-encoded. */
   GOOGLE_SERVICE_ACCOUNT_JSON?: string;
   /** Alias kept for parity with the original server (base64 service-account JSON). */

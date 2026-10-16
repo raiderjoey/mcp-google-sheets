@@ -52,8 +52,19 @@ npx wrangler login
 # Pipe the service-account JSON key file in directly.
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON < service-account-key.json
 
-# Any long random string. MCP clients must send it as a bearer token.
+# Any long random string. Claude Code and mcp-remote send it as a bearer token.
 openssl rand -base64 32 | npx wrangler secret put MCP_AUTH_TOKEN
+
+# OAuth sign-in for claude.ai connectors (see "Google sign-in for OAuth" below).
+npx wrangler secret put GOOGLE_OAUTH_CLIENT_ID
+npx wrangler secret put GOOGLE_OAUTH_CLIENT_SECRET
+npx wrangler secret put ALLOWED_EMAIL
+```
+
+Create the KV namespace that holds OAuth clients and tokens, then paste the printed `id` into the `kv_namespaces` entry in `wrangler.jsonc`:
+
+```bash
+npx wrangler kv namespace create OAUTH_KV
 ```
 
 On Windows PowerShell:
@@ -96,6 +107,12 @@ See [Connecting MCP clients](#-connecting-mcp-clients).
 5.  **Create and share a Drive folder.** In [Google Drive](https://drive.google.com/) create a folder (for example "AI Managed Sheets"), note its ID from the URL, then **Share** it with the service account's email address (the `client_email` value in the key file) as **Editor**. Untick "Notify people".
 6.  **Point the server at the folder** by setting `DRIVE_FOLDER_ID` to that ID. Anything else the account needs must be shared with it the same way.
 
+**Google sign-in for OAuth.** OAuth clients (claude.ai custom connectors) are authorized by signing in with Google, and only `ALLOWED_EMAIL` is accepted. In the same project:
+
+1.  **Configure the consent screen** under **APIs & Services → OAuth consent screen** (External, Testing is fine; add your own address as a test user). Only the `openid` and `email` scopes are requested.
+2.  **Create the client** under **APIs & Services → Credentials → Create credentials → OAuth client ID → Web application**. Add the authorized redirect URI `https://mcp-google-sheets.<your-subdomain>.workers.dev/callback` (and `http://localhost:8787/callback` for local development).
+3.  **Store the client ID and secret** with `wrangler secret put GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`, and your address with `wrangler secret put ALLOWED_EMAIL`.
+
 > **Service accounts and Drive storage.** A service account has no My Drive quota, so it cannot own new files in its own root. Always create spreadsheets inside a folder you own that is shared with the service account, or in a Shared Drive. `DRIVE_FOLDER_ID` makes that the default.
 
 ---
@@ -107,7 +124,11 @@ Secrets are set with `npx wrangler secret put <NAME>`. Plain variables can go un
 | Name | Required | Description |
 | --- | --- | --- |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | yes | Service-account key file contents, either raw JSON or base64-encoded. `CREDENTIALS_CONFIG` is accepted as an alias for compatibility with the original server. |
-| `MCP_AUTH_TOKEN` | yes | Shared secret. Every request to the MCP endpoint must carry `Authorization: Bearer <token>`. The server refuses all requests if this is unset. |
+| `MCP_AUTH_TOKEN` | for static-token clients | Shared secret for Claude Code, mcp-remote and other clients that send `Authorization: Bearer <token>`. When unset, static tokens get `503`; OAuth access tokens still work. |
+| `GOOGLE_OAUTH_CLIENT_ID` | for OAuth | Google OAuth client (Web application) used to sign the owner in at `/authorize`. |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | for OAuth | Its client secret. |
+| `ALLOWED_EMAIL` | for OAuth | The only Google account allowed to authorize an OAuth client. Set it as a secret so it stays out of the repo. `/authorize` answers `503` if any of these three is unset. |
+| `OAUTH_KV` | yes | KV namespace binding (in `wrangler.jsonc`) holding OAuth clients, grants and tokens. Create it with `npx wrangler kv namespace create OAUTH_KV`. Every route except the health check answers `503` without it. |
 | `DRIVE_FOLDER_ID` | no | Default folder for `list_spreadsheets` and `create_spreadsheet`. |
 | `ENABLED_TOOLS` | no | Comma-separated allow-list of tool names, e.g. `get_sheet_data,update_cells`. Unset enables every tool. |
 | `MCP_PATH` | no | Path of the MCP endpoint. Defaults to `/mcp`. |
@@ -115,11 +136,19 @@ Secrets are set with `npx wrangler secret put <NAME>`. Plain variables can go un
 
 **Authentication model.** The Worker authenticates to Google as the service account by signing a JWT with WebCrypto and exchanging it for an access token, which is cached per isolate. The interactive OAuth flow, token files, and Application Default Credentials from the original server do not exist on Workers and are not supported.
 
+**Client authentication.** The MCP endpoint accepts two kinds of bearer token: OAuth 2.1 access tokens issued by this Worker (via [`@cloudflare/workers-oauth-provider`](https://github.com/cloudflare/workers-oauth-provider), with dynamic client registration and PKCE), and the static `MCP_AUTH_TOKEN`. Signing in to Google at `/authorize` only proves you are `ALLOWED_EMAIL`; tool calls still run as the service account. Clients may register only `https://claude.ai/api/mcp/auth_callback` or a loopback `http://localhost`/`127.0.0.1`/`[::1]` redirect URI.
+
 ---
 
 ## 🔌 Connecting MCP clients
 
 Replace `https://mcp-google-sheets.example.workers.dev` with your Worker URL and `<token>` with your `MCP_AUTH_TOKEN`.
+
+**claude.ai custom connector** (also covers Claude Desktop, mobile, and cloud routines). This uses OAuth, so no token is pasted anywhere:
+
+1.  In claude.ai, open **Settings → Connectors → Add custom connector**.
+2.  Name it (for example `google-sheets`) and enter the URL `https://mcp-google-sheets.example.workers.dev/mcp`. Leave the advanced OAuth client fields empty; claude.ai registers itself.
+3.  Click **Connect**. You'll see this server's consent page naming the client and `claude.ai` as the destination; click **Allow**, then sign in with Google as `ALLOWED_EMAIL`. Any other account is refused.
 
 **Claude Code**
 
@@ -160,7 +189,7 @@ claude mcp add --transport http google-sheets https://mcp-google-sheets.example.
 }
 ```
 
-> Claude.ai's web **Custom connectors** expect OAuth rather than a static bearer token, so they cannot connect directly yet. Adding an OAuth layer on top of this server is possible with Cloudflare's `workers-oauth-provider` but is not included.
+Claude Code can also connect without a token, using OAuth with a loopback redirect: run `claude mcp add --transport http google-sheets <url>/mcp` without `--header`, then `/mcp` to sign in.
 
 ---
 
@@ -272,6 +301,7 @@ Smoke test the running server:
 
 ```bash
 curl http://localhost:8787/                       # health check, no auth
+curl http://localhost:8787/.well-known/oauth-authorization-server
 curl -X POST http://localhost:8787/mcp \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
@@ -315,7 +345,7 @@ Set `GOOGLE_TEST_SHARE_EMAIL` to also exercise a real share call.
 *   `CLOUDFLARE_API_TOKEN`: an API token with the **Workers Scripts: Edit** permission.
 *   `CLOUDFLARE_ACCOUNT_ID`: your account ID from the Cloudflare dashboard.
 
-Worker secrets (`GOOGLE_SERVICE_ACCOUNT_JSON`, `MCP_AUTH_TOKEN`) are set once with `wrangler secret put` and persist across deploys.
+Worker secrets (`GOOGLE_SERVICE_ACCOUNT_JSON`, `MCP_AUTH_TOKEN`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `ALLOWED_EMAIL`) are set once with `wrangler secret put` and persist across deploys.
 
 To gate deploys on the live Google tests, set the repository variable `RUN_LIVE_TESTS_BEFORE_DEPLOY` to `true` and add the Google secrets used by `.github/workflows/google-integration.yml` (`GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_TEST_SPREADSHEET_ID`, `GOOGLE_TEST_COPY_TARGET_ID`, plus `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_CREDENTIALS_CONFIG`).
 
@@ -323,7 +353,9 @@ To gate deploys on the live Google tests, set the repository variable `RUN_LIVE_
 
 ## 🔒 Security notes
 
-*   The endpoint fails closed: with no `MCP_AUTH_TOKEN` configured it answers `503`, and a missing or wrong token answers `401`. Token comparison is constant-time.
+*   The endpoint fails closed: a static token with no `MCP_AUTH_TOKEN` configured answers `503`, and a missing or wrong token answers `401` with a `WWW-Authenticate` challenge pointing at `/.well-known/oauth-protected-resource/mcp`. Static-token comparison is constant-time.
+*   Anyone can register an OAuth client, but only with claude.ai's callback or a loopback redirect URI, and nobody but `ALLOWED_EMAIL` (with a Google-verified address) can finish `/authorize`. The consent page names the client and the redirect host, cannot be framed, and is bound to the browser with a single-use handle and `__Host-` cookie.
+*   Whoever completes `/authorize` gets edit access to everything shared with the service account. To revoke OAuth access, delete the grant's keys from the `OAUTH_KV` namespace, or rotate by emptying the namespace.
 *   The service account can only reach files explicitly shared with it. Share single folders rather than your whole Drive.
 *   The health check at `/` needs no token and reveals only the server name and version. CORS preflight (`OPTIONS`) requests are also answered without a token, since they carry no credentials and return no data; this is what lets browser-hosted MCP clients connect.
 *   For extra protection put the Worker behind [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) or restrict it to a custom domain with `MCP_ALLOWED_HOSTNAMES`.
@@ -333,7 +365,7 @@ To gate deploys on the live Google tests, set the repository variable `RUN_LIVE_
 ## 🔁 Differences from the original Python server
 
 *   Transport is Streamable HTTP only. There is no stdio or SSE mode.
-*   Authentication is service account only. OAuth, token files, and Application Default Credentials are not available on Workers.
+*   Google access is service account only. Google OAuth user credentials, token files, and Application Default Credentials are not available on Workers. (The Worker's own OAuth layer authenticates MCP clients, not Google.)
 *   Configuration comes from Worker secrets and vars, not command-line flags or key files on disk.
 *   Drive search queries escape quotes and backslashes in the search text.
 *   Sheet lookups request only the fields they need, which reduces response size without changing results.

@@ -1,4 +1,4 @@
-import { createExecutionContext, waitOnExecutionContext } from "cloudflare:test";
+import { createExecutionContext, env as bindings, waitOnExecutionContext } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { Env } from "../src/env";
 import worker, { handleRequest } from "../src/index";
@@ -12,7 +12,12 @@ let baseEnv: Env;
 
 beforeAll(async () => {
   const { key } = await generateServiceAccount();
-  baseEnv = { MCP_AUTH_TOKEN: TOKEN, GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify(key), MCP_PATH: "/mcp" };
+  baseEnv = {
+    MCP_AUTH_TOKEN: TOKEN,
+    GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify(key),
+    MCP_PATH: "/mcp",
+    OAUTH_KV: (bindings as unknown as Env).OAUTH_KV,
+  };
 });
 
 type IncomingRequest = Parameters<typeof worker.fetch>[0];
