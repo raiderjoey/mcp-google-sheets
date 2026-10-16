@@ -19,7 +19,9 @@ npm test                    # all credential-free tests (pretest regenerates wor
 npx vitest run test/tools.test.ts            # one file
 npx vitest run -t "add_rows"                 # tests whose name matches
 npm run test:integration    # live Google tests; needs RUN_GOOGLE_INTEGRATION=1, DRIVE_FOLDER_ID,
-                            # and GOOGLE_SERVICE_ACCOUNT_JSON (or CREDENTIALS_CONFIG) in the host env
+                            # GOOGLE_TEST_SPREADSHEET_ID, GOOGLE_TEST_COPY_TARGET_ID (two user-owned
+                            # sheets; service accounts can't create files), and
+                            # GOOGLE_SERVICE_ACCOUNT_JSON (or CREDENTIALS_CONFIG) in the host env
 npm run deploy              # wrangler deploy
 npx wrangler secret put GOOGLE_SERVICE_ACCOUNT_JSON   # and MCP_AUTH_TOKEN
 ```

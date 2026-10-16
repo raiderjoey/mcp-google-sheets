@@ -48,6 +48,8 @@ jobs:
       CREDENTIALS_CONFIG: ${{ secrets.GOOGLE_CREDENTIALS_CONFIG }}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       GOOGLE_TEST_SHARE_EMAIL: ${{ secrets.GOOGLE_TEST_SHARE_EMAIL }}
+      GOOGLE_TEST_SPREADSHEET_ID: ${{ secrets.GOOGLE_TEST_SPREADSHEET_ID }}
+      GOOGLE_TEST_COPY_TARGET_ID: ${{ secrets.GOOGLE_TEST_COPY_TARGET_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

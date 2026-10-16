@@ -10,6 +10,8 @@ for (const name of [
   "CREDENTIALS_CONFIG",
   "DRIVE_FOLDER_ID",
   "GOOGLE_TEST_SHARE_EMAIL",
+  "GOOGLE_TEST_SPREADSHEET_ID",
+  "GOOGLE_TEST_COPY_TARGET_ID",
 ]) {
   const value = process.env[name];
   if (value) liveBindings[name] = value;

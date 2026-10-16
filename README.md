@@ -200,7 +200,7 @@ _Refer to the [ID Reference Guide](#-id-reference-guide) for more information ab
 *   **`list_spreadsheets`**: Lists spreadsheets in a Drive folder.
     *   `folder_id` (optional): Folder ID to search in. If omitted, uses `DRIVE_FOLDER_ID` or lists everything the service account can access.
     *   _Returns:_ `[{id, title}]`
-*   **`create_spreadsheet`**: Creates a new spreadsheet.
+*   **`create_spreadsheet`**: Creates a new spreadsheet. Service accounts have no Drive storage quota, so this fails with "The user's Drive storage quota has been exceeded" unless the folder is on a Shared Drive. Create the sheet yourself in the folder instead, or drop the tool with `ENABLED_TOOLS`.
     *   `title`: Title for the spreadsheet.
     *   `folder_id` (optional): Folder to create it in. Defaults to `DRIVE_FOLDER_ID`, then root.
     *   _Returns:_ `{spreadsheetId, title, folder}`
@@ -293,11 +293,13 @@ npm run typecheck
 npm test
 ```
 
-The live integration test creates and deletes spreadsheets in a disposable folder and exercises every tool against Google:
+The live integration test exercises every tool except `create_spreadsheet` against Google. It needs two spreadsheets that you own, in the folder, shared with the service account as editor. It works in tabs named `it-*` inside them and deletes those tabs afterwards; it never creates Drive files.
 
 ```bash
 RUN_GOOGLE_INTEGRATION=1 \
-DRIVE_FOLDER_ID=<disposable folder id> \
+DRIVE_FOLDER_ID=<folder id> \
+GOOGLE_TEST_SPREADSHEET_ID=<first spreadsheet id> \
+GOOGLE_TEST_COPY_TARGET_ID=<second spreadsheet id> \
 GOOGLE_SERVICE_ACCOUNT_JSON="$(cat service-account.json)" \
 npm run test:integration
 ```
@@ -315,7 +317,7 @@ Set `GOOGLE_TEST_SHARE_EMAIL` to also exercise a real share call.
 
 Worker secrets (`GOOGLE_SERVICE_ACCOUNT_JSON`, `MCP_AUTH_TOKEN`) are set once with `wrangler secret put` and persist across deploys.
 
-To gate deploys on the live Google tests, set the repository variable `RUN_LIVE_TESTS_BEFORE_DEPLOY` to `true` and add the Google secrets used by `.github/workflows/google-integration.yml` (`GOOGLE_DRIVE_FOLDER_ID` plus `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_CREDENTIALS_CONFIG`).
+To gate deploys on the live Google tests, set the repository variable `RUN_LIVE_TESTS_BEFORE_DEPLOY` to `true` and add the Google secrets used by `.github/workflows/google-integration.yml` (`GOOGLE_DRIVE_FOLDER_ID`, `GOOGLE_TEST_SPREADSHEET_ID`, `GOOGLE_TEST_COPY_TARGET_ID`, plus `GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_CREDENTIALS_CONFIG`).
 
 ---
 

@@ -1,9 +1,13 @@
 /**
  * Live Google integration test. Opt in with:
  *
- *   RUN_GOOGLE_INTEGRATION=1 DRIVE_FOLDER_ID=... GOOGLE_SERVICE_ACCOUNT_JSON='...' npm test -- test/google-integration.test.ts
+ *   RUN_GOOGLE_INTEGRATION=1 DRIVE_FOLDER_ID=... GOOGLE_SERVICE_ACCOUNT_JSON='...' \
+ *   GOOGLE_TEST_SPREADSHEET_ID=... GOOGLE_TEST_COPY_TARGET_ID=... npm run test:integration
  *
- * The folder must be disposable: the test creates and deletes spreadsheets.
+ * The two spreadsheets must be owned by a real user, live in DRIVE_FOLDER_ID, and be
+ * shared with the service account as editor. The test works in tabs named `it-*` and
+ * deletes them afterwards (and sweeps leftovers from failed runs first); it never
+ * creates Drive files, because service accounts have no storage quota.
  * GOOGLE_TEST_SHARE_EMAIL is optional and enables a real share call.
  */
 import { env as workerEnv } from "cloudflare:workers";
@@ -18,7 +22,6 @@ import {
   batchUpdateCells,
   copySheet,
   createSheet,
-  createSpreadsheet,
   findInSpreadsheet,
   getMultipleSheetData,
   getMultipleSpreadsheetSummary,
@@ -48,7 +51,6 @@ const TOOLS_WITH_INTEGRATION_COVERAGE = [
   "batch_update_cells",
   "copy_sheet",
   "create_sheet",
-  "create_spreadsheet",
   "find_in_spreadsheet",
   "get_multiple_sheet_data",
   "get_multiple_spreadsheet_summary",
@@ -63,9 +65,20 @@ const TOOLS_WITH_INTEGRATION_COVERAGE = [
   "update_cells",
 ];
 
+/**
+ * Tools the live test cannot exercise, with the reason. Service accounts have no Drive
+ * storage quota, so any call that makes the service account own a new file fails with
+ * "The user's Drive storage quota has been exceeded" unless the folder is on a Shared Drive.
+ */
+const TOOLS_WITHOUT_INTEGRATION_COVERAGE: Record<string, string> = {
+  create_spreadsheet: "service accounts cannot own new Drive files outside a Shared Drive",
+};
+
 describe("integration coverage declaration", () => {
-  it("matches the current tool list", () => {
-    expect([...TOOLS_WITH_INTEGRATION_COVERAGE].sort()).toEqual([...TOOL_NAMES].sort());
+  it("covers or explicitly excuses every tool", () => {
+    const excused = Object.keys(TOOLS_WITHOUT_INTEGRATION_COVERAGE);
+    expect(TOOLS_WITH_INTEGRATION_COVERAGE.filter((name) => excused.includes(name))).toEqual([]);
+    expect([...TOOLS_WITH_INTEGRATION_COVERAGE, ...excused].sort()).toEqual([...TOOL_NAMES].sort());
   });
 });
 
@@ -75,39 +88,50 @@ function invoke(tool: ToolDefinition, deps: ToolDeps, args: Record<string, unkno
   return tool.handler(deps, tool.inputSchema.parse(args));
 }
 
+/** Delete every `it-*` tab, leaving the fixture's own tabs alone. */
+async function deleteTestTabs(google: GoogleClient, spreadsheetId: string): Promise<void> {
+  const meta = await google.sheets.get(spreadsheetId, { fields: "sheets(properties(title,sheetId))" });
+  const requests = (meta.sheets ?? [])
+    .filter((sheet) => sheet.properties?.title?.startsWith(TEST_TAB_PREFIX))
+    .map((sheet) => ({ deleteSheet: { sheetId: sheet.properties!.sheetId } }));
+  if (requests.length) await google.sheets.batchUpdate(spreadsheetId, requests);
+}
+
+const TEST_TAB_PREFIX = "it-";
+
 describe.skipIf(!enabled)("live Google Sheets integration", () => {
   let deps: ToolDeps;
   let google: GoogleClient;
   let folderId: string;
-  const createdFileIds: string[] = [];
+  let primaryId: string;
+  let copyTargetId: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     folderId = env.DRIVE_FOLDER_ID ?? "";
     if (!folderId) throw new Error("DRIVE_FOLDER_ID is required for live integration tests");
+    primaryId = env.GOOGLE_TEST_SPREADSHEET_ID ?? "";
+    copyTargetId = env.GOOGLE_TEST_COPY_TARGET_ID ?? "";
+    if (!primaryId || !copyTargetId) {
+      throw new Error("GOOGLE_TEST_SPREADSHEET_ID and GOOGLE_TEST_COPY_TARGET_ID are required for live integration tests");
+    }
     const raw = env.GOOGLE_SERVICE_ACCOUNT_JSON || env.CREDENTIALS_CONFIG;
     if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON or CREDENTIALS_CONFIG is required");
     const provider = new ServiceAccountTokenProvider(parseServiceAccount(raw));
     google = new GoogleClient({ getAccessToken: () => provider.getAccessToken() });
     deps = { google, folderId };
+    await deleteTestTabs(google, primaryId);
+    await deleteTestTabs(google, copyTargetId);
   });
 
   afterAll(async () => {
-    for (const fileId of createdFileIds) {
+    for (const spreadsheetId of [primaryId, copyTargetId]) {
       try {
-        await google.drive.filesDelete(fileId, { supportsAllDrives: true });
+        if (spreadsheetId) await deleteTestTabs(google, spreadsheetId);
       } catch {
-        // best effort cleanup
+        // best effort cleanup; the next run sweeps leftovers
       }
     }
   });
-
-  async function createTestSpreadsheet(title: string): Promise<string> {
-    const created = await invoke(createSpreadsheet, deps, { title });
-    createdFileIds.push(created.spreadsheetId);
-    expect(created.title).toBe(title);
-    expect(created.folder).toBe(folderId);
-    return created.spreadsheetId;
-  }
 
   async function waitForSearchResult(title: string, spreadsheetId: string, timeoutMs = 45_000) {
     const deadline = Date.now() + timeoutMs;
@@ -124,15 +148,18 @@ describe.skipIf(!enabled)("live Google Sheets integration", () => {
     "exercises every tool against Google",
     async () => {
       const suffix = Date.now();
-      const primaryTitle = `mcp-google-sheets-it-primary-${suffix}`;
-      const copyTargetTitle = `mcp-google-sheets-it-copy-target-${suffix}`;
+      const tab = `${TEST_TAB_PREFIX}run-${suffix}`;
+      const copiedTab = `${TEST_TAB_PREFIX}copied-${suffix}`;
 
-      const primaryId = await createTestSpreadsheet(primaryTitle);
-      const copyTargetId = await createTestSpreadsheet(copyTargetTitle);
+      const createdSheet = await invoke(createSheet, deps, { spreadsheet_id: primaryId, title: `${tab}-new` });
+      expect(createdSheet.title).toBe(`${tab}-new`);
+
+      expect(await invoke(renameSheet, deps, { spreadsheet: primaryId, sheet: `${tab}-new`, new_name: tab })).toHaveProperty("replies");
+      expect(await invoke(listSheets, deps, { spreadsheet_id: primaryId })).toContain(tab);
 
       const updateResult = await invoke(updateCells, deps, {
         spreadsheet_id: primaryId,
-        sheet: "Sheet1",
+        sheet: tab,
         range: "A1:D3",
         data: [
           ["name", "score", "team", "double"],
@@ -142,40 +169,32 @@ describe.skipIf(!enabled)("live Google Sheets integration", () => {
       });
       expect(updateResult.updatedCells ?? 0).toBeGreaterThanOrEqual(12);
 
-      const data = await invoke(getSheetData, deps, { spreadsheet_id: primaryId, sheet: "Sheet1", range: "A1:D3" });
+      const data = await invoke(getSheetData, deps, { spreadsheet_id: primaryId, sheet: tab, range: "A1:D3" });
       expect(data.valueRanges[0].values[1][0]).toBe("Ada");
       expect(data.valueRanges[0].values[1][1]).toBe("42");
 
-      const formulas = await invoke(getSheetFormulas, deps, { spreadsheet_id: primaryId, sheet: "Sheet1", range: "D2:D3" });
+      const formulas = await invoke(getSheetFormulas, deps, { spreadsheet_id: primaryId, sheet: tab, range: "D2:D3" });
       expect(formulas).toEqual([["=B2*2"], ["=B3*2"]]);
 
       const batchCells = await invoke(batchUpdateCells, deps, {
         spreadsheet_id: primaryId,
-        sheet: "Sheet1",
+        sheet: tab,
         ranges: { "E1:E2": [["status"], ["ready"]], "F1:F2": [["owner"], ["integration"]] },
       });
       expect(batchCells.totalUpdatedCells ?? 0).toBeGreaterThanOrEqual(4);
 
-      expect(await invoke(addRows, deps, { spreadsheet_id: primaryId, sheet: "Sheet1", count: 1, start_row: 10 })).toHaveProperty("replies");
-      expect(await invoke(addColumns, deps, { spreadsheet_id: primaryId, sheet: "Sheet1", count: 1, start_column: 10 })).toHaveProperty("replies");
+      expect(await invoke(addRows, deps, { spreadsheet_id: primaryId, sheet: tab, count: 1, start_row: 10 })).toHaveProperty("replies");
+      expect(await invoke(addColumns, deps, { spreadsheet_id: primaryId, sheet: tab, count: 1, start_column: 10 })).toHaveProperty("replies");
 
-      expect(await invoke(listSheets, deps, { spreadsheet_id: primaryId })).toContain("Sheet1");
-
-      const createdSheet = await invoke(createSheet, deps, { spreadsheet_id: primaryId, title: "CreatedTab" });
-      expect(createdSheet.title).toBe("CreatedTab");
-
-      expect(await invoke(renameSheet, deps, { spreadsheet: primaryId, sheet: "CreatedTab", new_name: "RenamedTab" })).toHaveProperty("replies");
-      expect(await invoke(listSheets, deps, { spreadsheet_id: primaryId })).toContain("RenamedTab");
-
-      const sheet1Id = await lookupSheetId(google, primaryId, "Sheet1");
-      expect(sheet1Id).toBeDefined();
+      const tabId = await lookupSheetId(google, primaryId, tab);
+      expect(tabId).toBeDefined();
 
       const batchResult = await invoke(batchUpdate, deps, {
         spreadsheet_id: primaryId,
         requests: [
           {
             repeatCell: {
-              range: { sheetId: sheet1Id, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
+              range: { sheetId: tabId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 1 },
               cell: { note: "integration-test-note" },
               fields: "note",
             },
@@ -186,7 +205,7 @@ describe.skipIf(!enabled)("live Google Sheets integration", () => {
 
       const chartResult = await invoke(addChart, deps, {
         spreadsheet_id: primaryId,
-        sheet: "Sheet1",
+        sheet: tab,
         chart_type: "COLUMN",
         data_range: "A1:B3",
         title: "Integration Chart",
@@ -198,17 +217,17 @@ describe.skipIf(!enabled)("live Google Sheets integration", () => {
 
       const copyResult = await invoke(copySheet, deps, {
         src_spreadsheet: primaryId,
-        src_sheet: "Sheet1",
+        src_sheet: tab,
         dst_spreadsheet: copyTargetId,
-        dst_sheet: "CopiedSheet",
+        dst_sheet: copiedTab,
       });
       expect(copyResult).toHaveProperty("copy");
-      expect(await invoke(listSheets, deps, { spreadsheet_id: copyTargetId })).toContain("CopiedSheet");
+      expect(await invoke(listSheets, deps, { spreadsheet_id: copyTargetId })).toContain(copiedTab);
 
       const multiData = await invoke(getMultipleSheetData, deps, {
         queries: [
-          { spreadsheet_id: primaryId, sheet: "Sheet1", range: "A1:B3" },
-          { spreadsheet_id: copyTargetId, sheet: "CopiedSheet", range: "A1:B3" },
+          { spreadsheet_id: primaryId, sheet: tab, range: "A1:B3" },
+          { spreadsheet_id: copyTargetId, sheet: copiedTab, range: "A1:B3" },
         ],
       });
       expect(multiData).toHaveLength(2);
@@ -226,11 +245,12 @@ describe.skipIf(!enabled)("live Google Sheets integration", () => {
 
       expect(Array.isArray(await invoke(listFolders, deps, { parent_folder_id: folderId }))).toBe(true);
 
+      const primaryTitle = spreadsheets.find((sheet: { id: string; title: string }) => sheet.id === primaryId).title;
       const found = await waitForSearchResult(primaryTitle, primaryId);
       expect(found.some((sheet) => sheet.id === primaryId)).toBe(true);
 
       const foundCells = await invoke(findInSpreadsheet, deps, { spreadsheet_id: primaryId, query: "Ada" });
-      expect(foundCells.some((cell: { sheet: string; cell: string }) => cell.sheet === "Sheet1" && cell.cell === "A2"), JSON.stringify(foundCells)).toBe(true);
+      expect(foundCells.some((cell: { sheet: string; cell: string }) => cell.sheet === tab && cell.cell === "A2"), JSON.stringify(foundCells)).toBe(true);
 
       const shareEmail = env.GOOGLE_TEST_SHARE_EMAIL;
       if (shareEmail) {
