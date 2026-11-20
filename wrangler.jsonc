@@ -25,8 +25,8 @@
 	//   MCP_ALLOWED_HOSTNAMES        Comma-separated hostnames when serving from a custom domain.
 	"vars": {
 		"MCP_PATH": "/mcp",
-		// Drive folder "Obsidian" (My Drive/Obsidian): the vault root.
-		"VAULT_FOLDER_ID": "1PzPJ11vGwqFDCf6fSXZVU5vM1OM8PzUn"
+		// Drive folder "Joey's Brain" under Computers > My Computer (Drive for desktop sync of Documents\\Joey's Brain): the vault root.
+		"VAULT_FOLDER_ID": "1XEahQer7gJ-vjVsi6YV3BBX-1mnytXDK"
 	},
 	// OAuth clients, grants and tokens. Create it with
 	// `npx wrangler kv namespace create OAUTH_KV` and paste the id here.
