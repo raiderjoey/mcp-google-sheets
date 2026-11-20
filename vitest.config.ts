@@ -12,6 +12,7 @@ for (const name of [
   "GOOGLE_TEST_SHARE_EMAIL",
   "GOOGLE_TEST_SPREADSHEET_ID",
   "GOOGLE_TEST_COPY_TARGET_ID",
+  "GOOGLE_TEST_VAULT_FOLDER_ID",
 ]) {
   const value = process.env[name];
   if (value) liveBindings[name] = value;

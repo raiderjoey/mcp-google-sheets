@@ -7,12 +7,15 @@
 import { z } from "zod";
 import { columnIndexToLetter, parseA1Notation, splitChartSourceRanges, type GridRange } from "./a1";
 import { errorMessage } from "./google/auth";
-import type { GoogleClient, SpreadsheetMetadata } from "./google/client";
+import type { DriveFile, GoogleClient, SpreadsheetMetadata } from "./google/client";
+import { appendMarkdown, parseVaultPath, resolveVaultPath } from "./vault";
 
 export interface ToolDeps {
   google: GoogleClient;
   /** Default Drive folder for list/create operations. */
   folderId?: string;
+  /** Drive folder holding the Obsidian vault, for the vault_* tools. */
+  vaultFolderId?: string;
 }
 
 export interface ToolDefinition {
@@ -695,6 +698,115 @@ export const shareSpreadsheet = defineTool({
 });
 
 // ---------------------------------------------------------------------------
+// Obsidian vault (Markdown notes in the VAULT_FOLDER_ID Drive folder)
+// ---------------------------------------------------------------------------
+
+const VAULT_NOT_CONFIGURED = "VAULT_FOLDER_ID is not configured on this server.";
+const MAX_NOTE_BYTES = 1_000_000;
+const vaultPath = z
+  .string()
+  .describe("Note path relative to the vault root, including .md, e.g. '01_Projects/Hermes/Plan.md'");
+
+function fileSummary(file: DriveFile) {
+  return { id: file.id, name: file.name, mime_type: file.mimeType, modified_time: file.modifiedTime };
+}
+
+export const vaultFind = defineTool({
+  name: "vault_find",
+  title: "Find Vault Note",
+  readOnly: true,
+  description:
+    "Look up a note in the Obsidian vault by path before writing. Returns whether it exists, its folder's Drive ID, any missing folders, and next_step saying exactly how to proceed: append with vault_append if it exists, or create it with the Google Drive connector's create_file if only the note is missing. Always call this before creating or appending.",
+  inputSchema: z.object({ path: vaultPath }),
+  async handler({ google, vaultFolderId }, { path }) {
+    if (!vaultFolderId) return { error: VAULT_NOT_CONFIGURED };
+    let parsed;
+    try {
+      parsed = parseVaultPath(path);
+    } catch (error) {
+      return { error: errorMessage(error) };
+    }
+    const resolved = await resolveVaultPath(google, vaultFolderId, parsed);
+    const exists = resolved.matches.length > 0;
+    let next_step: string;
+    if (resolved.matches.length > 1) {
+      next_step = `This note exists ${resolved.matches.length} times (duplicates). Do not write to it; tell the user so they can merge the copies.`;
+    } else if (exists) {
+      next_step = `The note exists. Add to it with vault_append (path '${path}'). Never create another file with this name.`;
+    } else if (resolved.folderId) {
+      next_step = `The note does not exist. Create it with the Google Drive create_file tool: title '${parsed.fileName}', parentId '${resolved.folderId}', contentMimeType 'text/markdown', disableConversionToGoogleType true.`;
+    } else {
+      next_step = `Folder(s) ${resolved.missingFolders.map((name) => `'${name}'`).join(" / ")} do not exist. Ask the user before creating folders, or choose an existing folder.`;
+    }
+    return {
+      path,
+      exists,
+      file: resolved.matches.length === 1 ? fileSummary(resolved.matches[0]) : null,
+      ...(resolved.matches.length > 1 ? { duplicates: resolved.matches.map(fileSummary) } : {}),
+      folder_id: resolved.folderId,
+      missing_folders: resolved.missingFolders,
+      next_step,
+    };
+  },
+});
+
+export const vaultAppend = defineTool({
+  name: "vault_append",
+  title: "Append to Vault Note",
+  readOnly: false,
+  description:
+    "Add text to an existing Markdown note in the Obsidian vault, in place (same file, no copy). Appends at the end, or at the end of the section under under_heading. Append-only: it cannot replace or delete existing text. Refuses if the note is missing, duplicated, not plain text, or changed while being updated (retry once if so). Start the text with an empty line if it should be a separate paragraph.",
+  inputSchema: z.object({
+    path: vaultPath,
+    text: z.string().max(20_000).describe("Markdown to add (max 20,000 characters)"),
+    under_heading: z
+      .string()
+      .optional()
+      .describe("Optional heading text (e.g. 'Tasks' or '## Tasks'); the text goes at the end of that section"),
+  }),
+  async handler({ google, vaultFolderId }, { path, text, under_heading }) {
+    if (!vaultFolderId) return { error: VAULT_NOT_CONFIGURED };
+    try {
+      const resolved = await resolveVaultPath(google, vaultFolderId, parseVaultPath(path));
+      if (resolved.matches.length === 0) {
+        return { error: `Note '${path}' not found. Use vault_find to check the path, then create the note instead.` };
+      }
+      if (resolved.matches.length > 1) {
+        return { error: `'${path}' matches ${resolved.matches.length} files (duplicates); ask the user to merge them first.` };
+      }
+      const fileId = resolved.matches[0].id;
+      const fields = "id, name, mimeType, md5Checksum, size, modifiedTime";
+      const before = await google.drive.filesGet(fileId, { fields });
+      if (!before.mimeType?.startsWith("text/")) {
+        return { error: `'${path}' is not a plain-text note (type ${before.mimeType ?? "unknown"}); refusing to modify it.` };
+      }
+      if (Number(before.size ?? 0) > MAX_NOTE_BYTES) {
+        return { error: `'${path}' is too large to update safely (over ${MAX_NOTE_BYTES} bytes).` };
+      }
+      const content = await google.drive.filesGetText(fileId);
+      const updated = appendMarkdown(content, text, under_heading);
+      const check = await google.drive.filesGet(fileId, { fields: "md5Checksum" });
+      if (check.md5Checksum !== before.md5Checksum) {
+        return { error: `'${path}' changed while it was being updated (probably edited on another device). Nothing was written; retry.` };
+      }
+      const result = await google.drive.filesUpdateMedia(fileId, updated, "text/markdown; charset=UTF-8", {
+        fields: "id, modifiedTime",
+      });
+      return {
+        success: true,
+        path,
+        file_id: fileId,
+        modified_time: result.modifiedTime,
+        appended_chars: text.length,
+        under_heading: under_heading ?? null,
+      };
+    } catch (error) {
+      return { error: errorMessage(error) };
+    }
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Resource
 // ---------------------------------------------------------------------------
 
@@ -732,6 +844,8 @@ export const TOOLS: ToolDefinition[] = [
   findInSpreadsheet,
   batchUpdate,
   addChart,
+  vaultFind,
+  vaultAppend,
 ];
 
 export const TOOL_NAMES: string[] = TOOLS.map((tool) => tool.name);

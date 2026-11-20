@@ -9,6 +9,10 @@
  * deletes them afterwards (and sweeps leftovers from failed runs first); it never
  * creates Drive files, because service accounts have no storage quota.
  * GOOGLE_TEST_SHARE_EMAIL is optional and enables a real share call.
+ *
+ * The vault tools run only when GOOGLE_TEST_VAULT_FOLDER_ID is also set: a user-owned
+ * folder, shared with the service account as editor, containing a user-created
+ * `it-vault-note.md`. The test appends to that note and restores its content afterwards.
  */
 import { env as workerEnv } from "cloudflare:workers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -36,6 +40,8 @@ import {
   shareSpreadsheet,
   TOOL_NAMES,
   updateCells,
+  vaultAppend,
+  vaultFind,
   type ToolDefinition,
   type ToolDeps,
 } from "../src/tools";
@@ -63,6 +69,8 @@ const TOOLS_WITH_INTEGRATION_COVERAGE = [
   "search_spreadsheets",
   "share_spreadsheet",
   "update_cells",
+  "vault_append",
+  "vault_find",
 ];
 
 /**
@@ -271,5 +279,40 @@ describe.skipIf(!enabled)("live Google Sheets integration", () => {
       }
     },
     240_000,
+  );
+});
+
+const vaultFolderId = env.GOOGLE_TEST_VAULT_FOLDER_ID ?? "";
+
+describe.skipIf(!enabled || !vaultFolderId)("live Google Drive vault integration", () => {
+  it(
+    "finds, appends to, and restores a user-owned note",
+    async () => {
+      const raw = env.GOOGLE_SERVICE_ACCOUNT_JSON || env.CREDENTIALS_CONFIG;
+      if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON or CREDENTIALS_CONFIG is required");
+      const provider = new ServiceAccountTokenProvider(parseServiceAccount(raw));
+      const google = new GoogleClient({ getAccessToken: () => provider.getAccessToken() });
+      const deps: ToolDeps = { google, vaultFolderId };
+
+      const found = await invoke(vaultFind, deps, { path: "it-vault-note.md" });
+      expect(found.exists, JSON.stringify(found)).toBe(true);
+      const fileId = found.file.id as string;
+      const original = await google.drive.filesGetText(fileId);
+      try {
+        const marker = `it-append-${Date.now()}`;
+        const appended = await invoke(vaultAppend, deps, { path: "it-vault-note.md", text: marker });
+        expect(appended.success, JSON.stringify(appended)).toBe(true);
+        expect(appended.file_id).toBe(fileId);
+        expect(await google.drive.filesGetText(fileId)).toContain(marker);
+        const meta = await google.drive.filesGet(fileId, { fields: "mimeType" });
+        expect(meta.mimeType).toMatch(/^text\//);
+
+        const missing = await invoke(vaultFind, deps, { path: "it-no-such-note.md" });
+        expect(missing).toMatchObject({ exists: false, folder_id: vaultFolderId });
+      } finally {
+        await google.drive.filesUpdateMedia(fileId, original, "text/markdown; charset=UTF-8");
+      }
+    },
+    60_000,
   );
 });

@@ -52,7 +52,7 @@ export function createServerFromEnv(env: Env, options: RuntimeOptions = {}) {
   const provider = getTokenProvider(env, options);
   const google = new GoogleClient({ getAccessToken: () => provider.getAccessToken(), fetch: options.fetch });
   return createServer({
-    deps: { google, folderId: env.DRIVE_FOLDER_ID || undefined },
+    deps: { google, folderId: env.DRIVE_FOLDER_ID || undefined, vaultFolderId: env.VAULT_FOLDER_ID || undefined },
     enabledTools: parseEnabledTools(env.ENABLED_TOOLS),
   });
 }

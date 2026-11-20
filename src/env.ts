@@ -19,6 +19,8 @@ export interface Env {
   MCP_AUTH_TOKEN?: string;
   /** Default Google Drive folder ID for list/create operations. */
   DRIVE_FOLDER_ID?: string;
+  /** Drive folder holding the Obsidian vault (vault_find / vault_append). */
+  VAULT_FOLDER_ID?: string;
   /** Comma-separated allow-list of tool names. Empty means all tools. */
   ENABLED_TOOLS?: string;
   /** Path the MCP endpoint is served on. Defaults to /mcp. */

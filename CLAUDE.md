@@ -103,7 +103,7 @@ fails otherwise), and a bullet in the README tool list.
 
 Secrets (`wrangler secret put`): `GOOGLE_SERVICE_ACCOUNT_JSON` (alias `CREDENTIALS_CONFIG`),
 `MCP_AUTH_TOKEN`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `ALLOWED_EMAIL`.
-KV binding: `OAUTH_KV` (id in `wrangler.jsonc`). Vars: `DRIVE_FOLDER_ID`, `ENABLED_TOOLS`, `MCP_PATH`,
+KV binding: `OAUTH_KV` (id in `wrangler.jsonc`). Vars: `DRIVE_FOLDER_ID`, `VAULT_FOLDER_ID`, `ENABLED_TOOLS`, `MCP_PATH`,
 `MCP_ALLOWED_HOSTNAMES`. `vitest.config.ts` forwards the live-test variables from the host
 environment into the test runtime as bindings; nothing else reads `process.env`.
 

@@ -131,6 +131,7 @@ Secrets are set with `npx wrangler secret put <NAME>`. Plain variables can go un
 | `ALLOWED_EMAIL` | for OAuth | The only Google account allowed to authorize an OAuth client. Set it as a secret so it stays out of the repo. `/authorize` answers `503` if any of these three is unset. |
 | `OAUTH_KV` | yes | KV namespace binding (in `wrangler.jsonc`) holding OAuth clients, grants and tokens. Create it with `npx wrangler kv namespace create OAUTH_KV`. Every route except the health check answers `503` without it. |
 | `DRIVE_FOLDER_ID` | no | Default folder for `list_spreadsheets` and `create_spreadsheet`. |
+| `VAULT_FOLDER_ID` | no | Drive folder holding the Obsidian vault, for `vault_find` and `vault_append`. Share it with the service account as editor. |
 | `ENABLED_TOOLS` | no | Comma-separated allow-list of tool names, e.g. `get_sheet_data,update_cells`. Unset enables every tool. |
 | `MCP_PATH` | no | Path of the MCP endpoint. Defaults to `/mcp`. |
 | `MCP_ALLOWED_HOSTNAMES` | no | Comma-separated hostnames to accept in the `Host` header. Only needed when serving from a custom domain; `workers.dev` and localhost are allowed by default. |
@@ -234,6 +235,13 @@ _Refer to the [ID Reference Guide](#-id-reference-guide) for more information ab
     *   `title`: Title for the spreadsheet.
     *   `folder_id` (optional): Folder to create it in. Defaults to `DRIVE_FOLDER_ID`, then root.
     *   _Returns:_ `{spreadsheetId, title, folder}`
+*   **`vault_find`**: Looks up an Obsidian note in the `VAULT_FOLDER_ID` folder by vault-relative path (case-insensitive, `.md` only, no hidden or `..` segments). Call it before any create or append.
+    *   `path`: e.g. `01_Projects/Hermes/Plan.md`.
+    *   _Returns:_ `{path, exists, file, duplicates?, folder_id, missing_folders, next_step}`. `next_step` says whether to append, to create the note with the Google Drive connector's `create_file` (with the folder ID, `text/markdown` and conversion disabled), or to ask before creating folders. The service account cannot create files itself (no storage quota).
+*   **`vault_append`**: Adds text to an existing note in place (same file, no copy). Append-only.
+    *   `path`, `text` (max 20,000 characters), `under_heading` (optional: the text goes at the end of that section).
+    *   Refuses missing, duplicated, non-text or over-1 MB notes, and notes that change while being updated. Keeps CRLF line endings and a BOM.
+    *   _Returns:_ `{success, path, file_id, modified_time, appended_chars, under_heading}` or `{error}`.
 *   **`get_sheet_data`**: Reads data from a range in a sheet/tab.
     *   `spreadsheet_id`, `sheet`, `range` (optional A1 notation, e.g. `A1:C10`).
     *   `include_grid_data` (optional boolean, default `false`): Return full grid data with formatting (much larger).
