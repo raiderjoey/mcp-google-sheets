@@ -6,6 +6,7 @@ import type { FetchLike } from "./auth";
 
 const SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
 const DRIVE_BASE = "https://www.googleapis.com/drive/v3";
+const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3";
 
 export type CellValue = string | number | boolean | null;
 
@@ -39,6 +40,9 @@ export interface BatchUpdateResponse {
 export interface DriveFile {
   id: string;
   name: string;
+  mimeType?: string;
+  md5Checksum?: string;
+  size?: string;
   parents?: string[];
   createdTime?: string;
   modifiedTime?: string;
@@ -86,10 +90,19 @@ function extractErrorMessage(data: unknown, status: number): string {
 export class GoogleClient {
   constructor(private readonly options: GoogleClientOptions) {}
 
+  /**
+   * Send a request. `body` is sent as JSON; `rawBody` is sent as-is with its own
+   * content type. `responseType: "text"` returns the response body unparsed.
+   */
   async request<T = unknown>(
     method: string,
     url: string,
-    { query, body }: { query?: Query; body?: unknown } = {},
+    {
+      query,
+      body,
+      rawBody,
+      responseType = "json",
+    }: { query?: Query; body?: unknown; rawBody?: { contentType: string; data: string }; responseType?: "json" | "text" } = {},
   ): Promise<T> {
     const target = new URL(url);
     if (query) {
@@ -105,16 +118,20 @@ export class GoogleClient {
     const token = await this.options.getAccessToken();
     const headers: Record<string, string> = {
       authorization: `Bearer ${token}`,
-      accept: "application/json",
+      accept: responseType === "text" ? "*/*" : "application/json",
     };
     let payload: string | undefined;
-    if (body !== undefined) {
+    if (rawBody !== undefined) {
+      headers["content-type"] = rawBody.contentType;
+      payload = rawBody.data;
+    } else if (body !== undefined) {
       headers["content-type"] = "application/json";
       payload = JSON.stringify(body);
     }
     const fetchImpl = this.options.fetch ?? ((input, init) => fetch(input, init));
     const response = await fetchImpl(target.toString(), { method, headers, body: payload });
     const text = await response.text();
+    if (response.ok && responseType === "text") return text as T;
     let data: unknown;
     if (text) {
       try {
@@ -183,6 +200,25 @@ export class GoogleClient {
       this.request<DriveFile>("POST", `${DRIVE_BASE}/files`, {
         query: { fields: options.fields, supportsAllDrives: options.supportsAllDrives },
         body,
+      }),
+
+    filesGet: (fileId: string, options: { fields?: string } = {}) =>
+      this.request<DriveFile>("GET", `${DRIVE_BASE}/files/${encodeURIComponent(fileId)}`, {
+        query: { fields: options.fields },
+      }),
+
+    /** Download a non-Google file's bytes as text. */
+    filesGetText: (fileId: string) =>
+      this.request<string>("GET", `${DRIVE_BASE}/files/${encodeURIComponent(fileId)}`, {
+        query: { alt: "media" },
+        responseType: "text",
+      }),
+
+    /** Replace a file's content, keeping its ID, name and parents. */
+    filesUpdateMedia: (fileId: string, data: string, contentType: string, options: { fields?: string } = {}) =>
+      this.request<DriveFile>("PATCH", `${DRIVE_UPLOAD_BASE}/files/${encodeURIComponent(fileId)}`, {
+        query: { uploadType: "media", fields: options.fields },
+        rawBody: { contentType, data },
       }),
 
     filesList: (query: Query) => this.request<DriveFileList>("GET", `${DRIVE_BASE}/files`, { query }),

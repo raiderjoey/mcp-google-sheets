@@ -12,6 +12,30 @@ export interface RecordedCall {
   path: string;
   query: Record<string, string | string[]>;
   body?: any;
+  headers: Record<string, string>;
+}
+
+/** A Drive file in the fake's vault tree. `md5Checksum` changes on every write. */
+export interface FakeDriveFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  parents: string[];
+  content?: string;
+  md5Checksum?: string;
+  modifiedTime?: string;
+  size?: string;
+  trashed?: boolean;
+}
+
+export const FOLDER_MIME = "application/vnd.google-apps.folder";
+
+function parseBody(body: string): unknown {
+  try {
+    return JSON.parse(body);
+  } catch {
+    return body;
+  }
 }
 
 function decodePath(pathname: string): string {
@@ -60,6 +84,9 @@ export class FakeGoogle {
     ],
   };
   permissionResult: unknown = { id: "perm-1" };
+  /** Files served for `'<id>' in parents` listings, metadata gets, downloads and uploads. */
+  driveFiles: FakeDriveFile[] = [];
+  private writes = 0;
   /** Optional hook to force a specific response (e.g. an error) for a call. */
   override?: (call: RecordedCall) => Response | undefined;
 
@@ -70,11 +97,14 @@ export class FakeGoogle {
       url,
       path: decodePath(url.pathname),
       query: queryObject(url),
-      body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+      body: typeof init?.body === "string" ? parseBody(init.body) : undefined,
+      headers: Object.fromEntries(new Headers(init?.headers).entries()),
     };
     this.calls.push(call);
     const forced = this.override?.(call);
     if (forced) return forced;
+    const driveResponse = this.routeDriveFiles(call);
+    if (driveResponse) return driveResponse;
     return Response.json(this.route(call));
   };
 
@@ -84,6 +114,63 @@ export class FakeGoogle {
 
   client(): GoogleClient {
     return new GoogleClient({ getAccessToken: async () => "test-token", fetch: this.fetch });
+  }
+
+  /** Add a folder or file to the vault tree. Files get a starting md5 and size. */
+  addDriveFile(file: Omit<FakeDriveFile, "md5Checksum" | "size"> & { md5Checksum?: string }): FakeDriveFile {
+    const stored: FakeDriveFile = { modifiedTime: "2026-11-20T00:00:00Z", ...file };
+    if (stored.mimeType !== FOLDER_MIME) {
+      stored.md5Checksum ??= `md5-${stored.id}-0`;
+      stored.size = String(new TextEncoder().encode(stored.content ?? "").length);
+    }
+    this.driveFiles.push(stored);
+    return stored;
+  }
+
+  driveFile(id: string): FakeDriveFile | undefined {
+    return this.driveFiles.find((file) => file.id === id);
+  }
+
+  /** Simulate an edit made elsewhere (phone, Drive for desktop). */
+  touchDriveFile(id: string, content: string): void {
+    const file = this.driveFile(id);
+    if (!file) throw new Error(`no fake drive file ${id}`);
+    file.content = content;
+    file.md5Checksum = `md5-${id}-external-${++this.writes}`;
+  }
+
+  private driveMetadata(file: FakeDriveFile): Record<string, unknown> {
+    const { content: _content, parents: _parents, ...meta } = file;
+    return { ...meta, parents: file.parents };
+  }
+
+  private routeDriveFiles(call: RecordedCall): Response | undefined {
+    const { method, path, query } = call;
+    const upload = /^\/upload\/drive\/v3\/files\/([^/]+)$/.exec(path);
+    if (upload && method === "PATCH") {
+      const file = this.driveFile(upload[1]);
+      if (!file) return Response.json({ error: { code: 404, message: "File not found" } }, { status: 404 });
+      file.content = call.body as string;
+      file.md5Checksum = `md5-${file.id}-${++this.writes}`;
+      file.size = String(new TextEncoder().encode(file.content).length);
+      file.modifiedTime = "2026-11-20T12:00:00Z";
+      return Response.json(this.driveMetadata(file));
+    }
+    const single = /^\/drive\/v3\/files\/([^/]+)$/.exec(path);
+    if (single && method === "GET") {
+      const file = this.driveFile(single[1]);
+      if (!file) return undefined;
+      if (query.alt === "media") return new Response(file.content ?? "", { headers: { "content-type": file.mimeType } });
+      return Response.json(this.driveMetadata(file));
+    }
+    const q = typeof query.q === "string" ? /^'([^']+)' in parents and trashed = false$/.exec(query.q) : null;
+    if (path === "/drive/v3/files" && method === "GET" && q) {
+      const files = this.driveFiles
+        .filter((file) => file.parents.includes(q[1]) && !file.trashed)
+        .map((file) => this.driveMetadata(file));
+      return Response.json({ files });
+    }
+    return undefined;
   }
 
   private route(call: RecordedCall): unknown {

@@ -41,7 +41,7 @@ function setup(folderId?: string) {
 }
 
 describe("tool registry", () => {
-  it("exposes the same 20 tools as the original server", () => {
+  it("exposes the original server's 20 tools, then the vault tools", () => {
     expect(TOOL_NAMES).toEqual([
       "get_sheet_data",
       "get_sheet_formulas",
@@ -63,6 +63,8 @@ describe("tool registry", () => {
       "find_in_spreadsheet",
       "batch_update",
       "add_chart",
+      "vault_find",
+      "vault_append",
     ]);
     expect(new Set(TOOL_NAMES).size).toBe(TOOLS.length);
   });

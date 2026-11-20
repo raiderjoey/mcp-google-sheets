@@ -20,6 +20,7 @@
 	//
 	// Optional vars:
 	//   DRIVE_FOLDER_ID              Default Drive folder for list/create operations.
+	//   VAULT_FOLDER_ID              Drive folder holding the Obsidian vault (vault_find / vault_append).
 	//   ENABLED_TOOLS                Comma-separated allow-list of tool names.
 	//   MCP_ALLOWED_HOSTNAMES        Comma-separated hostnames when serving from a custom domain.
 	"vars": {
