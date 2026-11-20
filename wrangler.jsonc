@@ -24,7 +24,9 @@
 	//   ENABLED_TOOLS                Comma-separated allow-list of tool names.
 	//   MCP_ALLOWED_HOSTNAMES        Comma-separated hostnames when serving from a custom domain.
 	"vars": {
-		"MCP_PATH": "/mcp"
+		"MCP_PATH": "/mcp",
+		// Drive folder "Obsidian" (My Drive/Obsidian): the vault root.
+		"VAULT_FOLDER_ID": "1PzPJ11vGwqFDCf6fSXZVU5vM1OM8PzUn"
 	},
 	// OAuth clients, grants and tokens. Create it with
 	// `npx wrangler kv namespace create OAUTH_KV` and paste the id here.
