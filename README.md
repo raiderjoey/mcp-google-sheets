@@ -235,7 +235,7 @@ _Refer to the [ID Reference Guide](#-id-reference-guide) for more information ab
     *   `title`: Title for the spreadsheet.
     *   `folder_id` (optional): Folder to create it in. Defaults to `DRIVE_FOLDER_ID`, then root.
     *   _Returns:_ `{spreadsheetId, title, folder}`
-*   **`vault_find`**: Looks up an Obsidian note in the `VAULT_FOLDER_ID` folder by vault-relative path (case-insensitive, `.md` only, no hidden or `..` segments). Call it before any create or append.
+*   **`vault_find`**: Looks up an Obsidian note in the `VAULT_FOLDER_ID` folder by vault-relative path (case-insensitive, `.md` only, no hidden or `..` segments). Call it before any create or append. Both vault tools refuse any path with a segment that starts with `90_Private` (the vault's private folder), in any letter case.
     *   `path`: e.g. `01_Projects/Hermes/Plan.md`.
     *   _Returns:_ `{path, exists, file, duplicates?, folder_id, missing_folders, next_step}`. `next_step` says whether to append, to create the note with the Google Drive connector's `create_file` (with the folder ID, `text/markdown` and conversion disabled), or to ask before creating folders. The service account cannot create files itself (no storage quota).
 *   **`vault_append`**: Adds text to an existing note in place (same file, no copy). Append-only.

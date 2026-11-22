@@ -5,6 +5,12 @@
  *
  * Name matching is case-insensitive because the desktop copy lives on a
  * case-insensitive filesystem (NTFS): `plan.md` and `Plan.md` are the same note there.
+ *
+ * `90_Private/` is the vault's private folder (Vault Conventions, 2026-11-22). No
+ * tool here reads or writes it: `parseVaultPath`, which every vault tool goes
+ * through, refuses any path with a segment whose name starts with `90_private`,
+ * in any letter case and at any depth, so look-alikes and sync-conflict copies
+ * are refused too.
  */
 import type { DriveFile, GoogleClient } from "./google/client";
 
@@ -15,11 +21,27 @@ export interface VaultPath {
   fileName: string;
 }
 
+const PRIVATE_PREFIX = "90_private";
+const PRIVATE_ERROR = "That path is in the vault's private folder (90_Private), which this server does not read or write.";
+
+/** True when a path segment names the private folder or a look-alike of it. */
+export function isPrivateSegment(segment: string): boolean {
+  const key = segment
+    .normalize("NFKC")
+    .replace(/[\p{Cc}\p{Cf}]/gu, "")
+    .replace(/\p{Zs}/gu, " ")
+    .trim()
+    .toLowerCase();
+  return key.startsWith(PRIVATE_PREFIX);
+}
+
 /** Split and validate a vault-relative note path. Throws with a readable message. */
 export function parseVaultPath(raw: string): VaultPath {
   const path = raw.trim().replace(/\\/g, "/").replace(/^\/+/, "");
   if (!path) throw new Error("Path is empty.");
   if (path.length > 1000) throw new Error("Path is too long.");
+  // First, and without echoing the path: the message must not repeat a private note's name.
+  if (path.split("/").some(isPrivateSegment)) throw new Error(PRIVATE_ERROR);
   if (path.endsWith("/")) throw new Error(`'${raw}' is a folder, not a note.`);
   const segments = path.split("/");
   for (const segment of segments) {

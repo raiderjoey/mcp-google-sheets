@@ -51,6 +51,43 @@ describe("parseVaultPath", () => {
   });
 });
 
+describe("parseVaultPath and the private folder", () => {
+  it.each([
+    "90_Private/TTC.md",
+    "90_private/x.md",
+    "90_PRIVATE/x.md",
+    "/90_Private/x.md",
+    "\\90_Private\\x.md",
+    "90_Private/deep/x.md",
+    "90_Private (conflict)/x.md",
+    "90_Private 2/x.md",
+    " 90_Private/x.md",
+    "90_Private /x.md",
+    "01_Projects/90_Private/x.md",
+    "00_Inbox/90_Private.md",
+    "90_\u200bPrivate/x.md",
+    "\uff19\uff10_Private/x.md",
+    "\u00a090_Private/x.md",
+  ])("rejects %j", (path) => {
+    expect(() => parseVaultPath(path)).toThrow(/private/i);
+  });
+
+  it("does not echo the rest of a private path back", () => {
+    let message = "";
+    try {
+      parseVaultPath("90_Private/Some Secret Title.md");
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).not.toMatch(/Some Secret Title/);
+  });
+
+  it("still accepts names that only contain the word", () => {
+    expect(parseVaultPath("00_Inbox/About 90_Private.md").fileName).toBe("About 90_Private.md");
+    expect(parseVaultPath("190_Private/x.md").folders).toEqual(["190_Private"]);
+  });
+});
+
 describe("appendMarkdown", () => {
   it("appends at the end, adding a newline when the file lacks one", () => {
     expect(appendMarkdown("line", "added")).toBe("line\nadded\n");
@@ -160,6 +197,18 @@ describe("vault_find", () => {
     const { deps } = vaultSetup();
     expect(await invoke(vaultFind, deps, { path: "../x.md" })).toEqual({ error: expect.any(String) });
   });
+
+  it("refuses the private folder without asking Drive anything", async () => {
+    const { google, deps } = vaultSetup();
+    google.addDriveFile({ id: "private", name: "90_Private", mimeType: FOLDER_MIME, parents: [ROOT] });
+    google.addDriveFile({ id: "ttc", name: "TTC.md", mimeType: "text/markdown", parents: ["private"], content: "PRIVATE-MARKER" });
+    for (const path of ["90_Private/TTC.md", "90_private/ttc.md", "90_Private/New.md"]) {
+      const result = await invoke(vaultFind, deps, { path });
+      expect(result).toEqual({ error: expect.stringMatching(/private/i) });
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE-MARKER/);
+    }
+    expect(google.calls).toEqual([]);
+  });
 });
 
 describe("vault_append", () => {
@@ -209,6 +258,18 @@ describe("vault_append", () => {
     const result = await invoke(vaultAppend, deps, { path: "00_Inbox/Missing.md", text: "x" });
     expect(result.error).toMatch(/not found.*vault_find/s);
     expect(google.calls.some((call) => call.method === "PATCH")).toBe(false);
+  });
+
+  it("refuses the private folder without reading or uploading", async () => {
+    const { google, deps } = vaultSetup();
+    google.addDriveFile({ id: "private", name: "90_Private", mimeType: FOLDER_MIME, parents: [ROOT] });
+    google.addDriveFile({ id: "ttc", name: "TTC.md", mimeType: "text/markdown", parents: ["private"], content: "PRIVATE-MARKER" });
+    for (const path of ["90_Private/TTC.md", "90_PRIVATE/TTC.md"]) {
+      const result = await invoke(vaultAppend, deps, { path, text: "x" });
+      expect(result.error).toMatch(/private/i);
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE-MARKER/);
+    }
+    expect(google.calls).toEqual([]);
   });
 
   it("refuses duplicates", async () => {

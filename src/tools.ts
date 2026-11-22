@@ -705,7 +705,9 @@ const VAULT_NOT_CONFIGURED = "VAULT_FOLDER_ID is not configured on this server."
 const MAX_NOTE_BYTES = 1_000_000;
 const vaultPath = z
   .string()
-  .describe("Note path relative to the vault root, including .md, e.g. '01_Projects/Hermes/Plan.md'");
+  .describe(
+    "Note path relative to the vault root, including .md, e.g. '01_Projects/Hermes/Plan.md'. Paths in the private folder '90_Private' are refused.",
+  );
 
 function fileSummary(file: DriveFile) {
   return { id: file.id, name: file.name, mime_type: file.mimeType, modified_time: file.modifiedTime };
