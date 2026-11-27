@@ -19,6 +19,12 @@ import { checkClientRegistration, handleAuthorization, LOOPBACK_HOSTS } from "./
 import { createServer, SERVER_NAME, SERVER_VERSION } from "./server";
 
 const DEFAULT_MCP_PATH = "/mcp";
+/**
+ * Largest MCP request body accepted; bigger ones get 413. Large enough for
+ * bulk batch_update_cells / add_rows payloads, small enough that one request
+ * cannot exhaust isolate memory (GHSA-f897-62hf-6gxq, GHSA-46jr-4wx8-v453).
+ */
+const MAX_REQUEST_BODY_SIZE = 1024 * 1024;
 
 /** Token providers are cached per isolate so access tokens are reused across requests. */
 const providerCache = new Map<string, ServiceAccountTokenProvider>();
@@ -82,6 +88,44 @@ async function resolveStaticToken(token: string, env: Env, resource: string) {
   return { props: { auth: "static" }, audience: resource };
 }
 
+/**
+ * Read a request body, giving up as soon as it exceeds `limit` bytes. Returns
+ * null when it is too large; never buffers more than `limit` plus one chunk.
+ */
+async function readCapped(body: ReadableStream<Uint8Array>, declaredLength: string | null, limit: number): Promise<ArrayBuffer | null> {
+  const declared = Number(declaredLength);
+  if (Number.isFinite(declared) && declared > limit) return null;
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  return new Blob(chunks).arrayBuffer();
+}
+
+/**
+ * Enforce MAX_REQUEST_BODY_SIZE. Returns the request to serve (re-wrapped
+ * around the buffered body), or null when the body is too large.
+ */
+async function capBody(request: Request): Promise<Request | null> {
+  if (!request.body) return request;
+  const body = await readCapped(request.body, request.headers.get("content-length"), MAX_REQUEST_BODY_SIZE);
+  if (body === null) return null;
+  // Framing headers are recomputed from the buffered body.
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+  headers.delete("transfer-encoding");
+  return new Request(request.url, { method: request.method, headers, body, signal: request.signal });
+}
+
 async function serveMcp(request: Request, env: Env, ctx: ExecutionContext, options: RuntimeOptions): Promise<Response> {
   const mcpPath = env.MCP_PATH || DEFAULT_MCP_PATH;
   if (request.method !== "OPTIONS") {
@@ -95,12 +139,17 @@ async function serveMcp(request: Request, env: Env, ctx: ExecutionContext, optio
       return json({ error: `Server is not configured: ${errorMessage(error)}` }, 503);
     }
   }
+  const capped = await capBody(request);
+  if (!capped) return json({ error: `Request body must not exceed ${MAX_REQUEST_BODY_SIZE} bytes` }, 413);
   const handler = createMcpHandler(() => createServerFromEnv(env, options), {
     route: mcpPath,
     allowedHostnames: parseHostnames(env.MCP_ALLOWED_HOSTNAMES),
+    // agents 0.33 applies this only to the 2026-07-28 protocol lane, not the
+    // 2025-era legacy lane claude.ai uses; capBody above covers both.
+    maxRequestBodySize: MAX_REQUEST_BODY_SIZE,
     onerror: (error) => console.error(`MCP handler error: ${errorMessage(error)}`),
   });
-  return handler(request, env, ctx);
+  return handler(capped, env, ctx);
 }
 
 /**

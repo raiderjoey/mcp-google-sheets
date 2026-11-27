@@ -4,7 +4,7 @@ import type { Env } from "../src/env";
 import worker, { handleRequest } from "../src/index";
 import { TOOL_NAMES } from "../src/tools";
 import { FakeGoogle } from "./helpers/fake-google";
-import { initializeParams, readRpc, rpcRequest, toolJson } from "./helpers/mcp";
+import { initializeParams, PROTOCOL_VERSION, readRpc, rpcRequest, toolJson } from "./helpers/mcp";
 import { generateServiceAccount } from "./helpers/service-account";
 
 const TOKEN = "top-secret-token";
@@ -124,6 +124,68 @@ describe("MCP protocol", () => {
     expect(wrongPath.status).toBe(404);
     const message = await readRpc(await run(rpcRequest("tools/list", {}, { token: TOKEN, url: "http://localhost/sheets" }), env));
     expect(message.result.tools).toHaveLength(TOOL_NAMES.length);
+  });
+});
+
+describe("request body cap", () => {
+  const CAP = 1024 * 1024;
+  const CAP_ERROR = { error: `Request body must not exceed ${CAP} bytes` };
+  const mcpHeaders = (token?: string) => ({
+    host: "localhost",
+    "content-type": "application/json",
+    accept: "application/json, text/event-stream",
+    "mcp-protocol-version": PROTOCOL_VERSION,
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  });
+  /** A valid initialize request whose JSON body is exactly `size` bytes. */
+  const initializeBody = (size: number) => {
+    const shell = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { ...initializeParams(), padding: "" } });
+    const body = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { ...initializeParams(), padding: "x".repeat(size - shell.length) },
+    });
+    expect(body.length).toBe(size);
+    return body;
+  };
+  const post = (body: BodyInit, token?: string) =>
+    new Request("http://localhost/mcp", { method: "POST", headers: mcpHeaders(token), body });
+
+  it("still serves a body of exactly the cap", async () => {
+    const response = await run(post(initializeBody(CAP), TOKEN));
+    expect(response.status).toBe(200);
+    expect((await readRpc(response)).result.serverInfo.name).toBe("Google Spreadsheet");
+  });
+
+  it("answers 413 for a body one byte over the cap", async () => {
+    const response = await run(post(initializeBody(CAP + 1), TOKEN));
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual(CAP_ERROR);
+  });
+
+  it("answers 413 for a streamed body over the cap sent without Content-Length", async () => {
+    const chunk = new TextEncoder().encode("x".repeat(64 * 1024));
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= 32) return controller.close();
+        sent += 1;
+        controller.enqueue(chunk);
+      },
+    });
+    const request = post(stream, TOKEN);
+    expect(request.headers.get("content-length")).toBeNull();
+    const response = await run(request);
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual(CAP_ERROR);
+    // Reading stopped once the cap was passed: cap / chunk + 1 chunks, plus at most one queued.
+    expect(sent).toBeLessThanOrEqual(CAP / chunk.length + 2);
+  });
+
+  it("checks auth before the cap: an unauthenticated oversized body gets 401", async () => {
+    const response = await run(post(initializeBody(CAP + 1)));
+    expect(response.status).toBe(401);
   });
 });
 
