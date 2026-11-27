@@ -30,8 +30,8 @@ jobs:
     name: Typecheck and unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -53,8 +53,8 @@ jobs:
       GOOGLE_TEST_SPREADSHEET_ID: ${{ secrets.GOOGLE_TEST_SPREADSHEET_ID }}
       GOOGLE_TEST_COPY_TARGET_ID: ${{ secrets.GOOGLE_TEST_COPY_TARGET_ID }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -67,14 +67,14 @@ jobs:
     needs: [unit, live-google-integration]
     if: always() && needs.unit.result == 'success' && (needs.live-google-integration.result == 'success' || needs.live-google-integration.result == 'skipped')
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
       - run: npm ci
       - name: Deploy
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
