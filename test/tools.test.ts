@@ -65,6 +65,8 @@ describe("tool registry", () => {
       "add_chart",
       "vault_find",
       "vault_append",
+      "vault_edit",
+      "vault_read",
     ]);
     expect(new Set(TOOL_NAMES).size).toBe(TOOLS.length);
   });

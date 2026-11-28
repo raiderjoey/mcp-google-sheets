@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { TOOL_NAMES, vaultAppend, vaultFind, type ToolDefinition, type ToolDeps } from "../src/tools";
-import { appendMarkdown, parseVaultPath } from "../src/vault";
+import { TOOL_NAMES, vaultAppend, vaultEdit, vaultFind, vaultRead, type ToolDefinition, type ToolDeps } from "../src/tools";
+import { appendMarkdown, editMarkdown, parseVaultPath, unifiedDiff } from "../src/vault";
 import { FakeGoogle, FOLDER_MIME } from "./helpers/fake-google";
 
 function invoke(tool: ToolDefinition, deps: ToolDeps, args: Record<string, unknown>): Promise<any> {
@@ -155,6 +155,7 @@ describe("vault_find", () => {
       file: { id: "plan", name: "Plan.md", mime_type: "text/markdown" },
     });
     expect(result.next_step).toMatch(/vault_append/);
+    expect(result.next_step).toMatch(/vault_edit/);
   });
 
   it("gives create instructions when the folder exists but the note does not", async () => {
@@ -302,5 +303,314 @@ describe("vault_append", () => {
 
   it("caps the text length in its schema", () => {
     expect(() => vaultAppend.inputSchema.parse({ path: "a.md", text: "x".repeat(20_001) })).toThrow();
+  });
+});
+
+describe("editMarkdown", () => {
+  const note = "# Plan\n\n## Tasks\n\n- one\n- two\n";
+
+  it("replaces a unique match", () => {
+    expect(editMarkdown(note, [{ old_text: "- one", new_text: "- uno" }])).toEqual({
+      content: "# Plan\n\n## Tasks\n\n- uno\n- two\n",
+      replacements: 1,
+    });
+  });
+
+  it("applies edits in order, each against the result of the last", () => {
+    const result = editMarkdown(note, [
+      { old_text: "- one", new_text: "- first" },
+      { old_text: "- first\n- two", new_text: "- first\n- second" },
+    ]);
+    expect(result.content).toBe("# Plan\n\n## Tasks\n\n- first\n- second\n");
+    expect(result.replacements).toBe(2);
+  });
+
+  it("deletes text when new_text is empty", () => {
+    expect(editMarkdown(note, [{ old_text: "- two\n", new_text: "" }]).content).toBe("# Plan\n\n## Tasks\n\n- one\n");
+  });
+
+  it("refuses an old_text that is not in the note, naming the edit", () => {
+    expect(() => editMarkdown(note, [{ old_text: "- one", new_text: "x" }, { old_text: "- three", new_text: "x" }])).toThrow(
+      /Edit 2: old_text not found/,
+    );
+  });
+
+  it("refuses an ambiguous old_text unless replace_all is set", () => {
+    const twice = "a b a\n";
+    expect(() => editMarkdown(twice, [{ old_text: "a", new_text: "c" }])).toThrow(/Edit 1: old_text appears 2 times/);
+    expect(editMarkdown(twice, [{ old_text: "a", new_text: "c", replace_all: true }])).toEqual({ content: "c b c\n", replacements: 2 });
+  });
+
+  it("treats $ in new_text literally", () => {
+    expect(editMarkdown("price\n", [{ old_text: "price", new_text: "$& $1 $$" }]).content).toBe("$& $1 $$\n");
+  });
+
+  it("matches LF text against a CRLF note and keeps CRLF and the BOM", () => {
+    const crlf = "﻿# Plan\r\n\r\n- one\r\n- two\r\n";
+    expect(editMarkdown(crlf, [{ old_text: "- one\n- two", new_text: "- one\n- 1.5\n- two" }]).content).toBe(
+      "﻿# Plan\r\n\r\n- one\r\n- 1.5\r\n- two\r\n",
+    );
+  });
+
+  it("replaces the whole note when given content, in the note's line endings", () => {
+    expect(editMarkdown("﻿a\r\nb\r\n", { content: "x\ny\n" })).toEqual({ content: "﻿x\r\ny\r\n", replacements: 1 });
+  });
+
+  it("refuses an empty old_text", () => {
+    expect(() => editMarkdown(note, [{ old_text: "", new_text: "x" }])).toThrow(/Edit 1: old_text is empty/);
+  });
+});
+
+describe("unifiedDiff", () => {
+  it("is empty when nothing changed", () => {
+    expect(unifiedDiff("a\nb\n", "a\nb\n", "n.md")).toBe("");
+  });
+
+  it("shows a changed line with three lines of context", () => {
+    const before = ["1", "2", "3", "4", "5", "6", "7", "8", "9"].join("\n") + "\n";
+    const after = before.replace("5\n", "five\n");
+    expect(unifiedDiff(before, after, "n.md")).toBe(
+      ["--- a/n.md", "+++ b/n.md", "@@ -2,7 +2,7 @@", " 2", " 3", " 4", "-5", "+five", " 6", " 7", " 8", ""].join("\n"),
+    );
+  });
+
+  it("splits distant changes into separate hunks", () => {
+    const lines = Array.from({ length: 20 }, (_, i) => String(i + 1));
+    const after = [...lines];
+    after[1] = "two";
+    after[17] = "eighteen";
+    const diff = unifiedDiff(lines.join("\n") + "\n", after.join("\n") + "\n", "n.md");
+    expect(diff.match(/^@@/gm)).toHaveLength(2);
+    expect(diff).toContain("@@ -1,5 +1,5 @@");
+    expect(diff).toContain("@@ -15,6 +15,6 @@");
+  });
+
+  it("shows pure insertions and deletions", () => {
+    expect(unifiedDiff("a\nc\n", "a\nb\nc\n", "n.md")).toBe(["--- a/n.md", "+++ b/n.md", "@@ -1,2 +1,3 @@", " a", "+b", " c", ""].join("\n"));
+    expect(unifiedDiff("a\nb\n", "", "n.md")).toBe(["--- a/n.md", "+++ b/n.md", "@@ -1,2 +0,0 @@", "-a", "-b", ""].join("\n"));
+  });
+});
+
+describe("vault_edit", () => {
+  const PATH = "01_Projects/Hermes/Plan.md";
+  const ORIGINAL = "# Plan\n\n## Tasks\n\n- one\n\n## Notes\n\nSome notes.\n";
+  const uploads = (google: FakeGoogle) => google.calls.filter((call) => call.method === "PATCH");
+
+  it("is registered as a destructive write tool", () => {
+    expect(TOOL_NAMES).toContain("vault_edit");
+    expect(vaultEdit.readOnly).toBe(false);
+  });
+
+  it("edits the same file in place as markdown and returns the diff", async () => {
+    const { google, deps } = vaultSetup();
+    const result = await invoke(vaultEdit, deps, { path: PATH, edits: [{ old_text: "Some notes.", new_text: "Better notes." }] });
+    expect(result).toMatchObject({ success: true, path: PATH, file_id: "plan", mode: "edits", replacements: 1, md5: "md5-plan-1" });
+    expect(result.diff).toContain("-Some notes.\n+Better notes.");
+    expect(google.driveFile("plan")!.content).toBe(ORIGINAL.replace("Some notes.", "Better notes."));
+    const [upload] = uploads(google);
+    expect(upload.path).toBe("/upload/drive/v3/files/plan");
+    expect(upload.headers["content-type"]).toMatch(/^text\/markdown/);
+    expect(google.calls.filter((call) => call.method === "POST")).toEqual([]);
+  });
+
+  it("dry_run returns the diff and the note's md5 without writing", async () => {
+    const { google, deps } = vaultSetup();
+    const result = await invoke(vaultEdit, deps, { path: PATH, edits: [{ old_text: "- one", new_text: "- uno" }], dry_run: true });
+    expect(result).toMatchObject({ dry_run: true, changed: true, file_id: "plan", md5: "md5-plan-0", replacements: 1 });
+    expect(result.diff).toContain("-- one\n+- uno");
+    expect(uploads(google)).toEqual([]);
+    expect(google.driveFile("plan")!.content).toBe(ORIGINAL);
+  });
+
+  it("writes when expected_md5 matches the note", async () => {
+    const { google, deps } = vaultSetup();
+    const result = await invoke(vaultEdit, deps, { path: PATH, edits: [{ old_text: "- one", new_text: "- uno" }], expected_md5: "md5-plan-0" });
+    expect(result.success).toBe(true);
+    expect(google.driveFile("plan")!.content).toContain("- uno");
+  });
+
+  it("refuses when expected_md5 no longer matches (changed after the preview)", async () => {
+    const { google, deps } = vaultSetup();
+    google.touchDriveFile("plan", ORIGINAL + "phone edit\n");
+    const result = await invoke(vaultEdit, deps, { path: PATH, edits: [{ old_text: "- one", new_text: "- uno" }], expected_md5: "md5-plan-0" });
+    expect(result.error).toMatch(/changed since/);
+    expect(uploads(google)).toEqual([]);
+  });
+
+  it("replaces the whole note with content when expected_md5 is given", async () => {
+    const { google, deps } = vaultSetup();
+    const result = await invoke(vaultEdit, deps, { path: PATH, content: "# Plan\n\nRewritten.\n", expected_md5: "md5-plan-0" });
+    expect(result).toMatchObject({ success: true, mode: "content" });
+    expect(google.driveFile("plan")!.content).toBe("# Plan\n\nRewritten.\n");
+  });
+
+  it("refuses a whole-note replace without expected_md5, but previews it", async () => {
+    const { google, deps } = vaultSetup();
+    const refused = await invoke(vaultEdit, deps, { path: PATH, content: "x\n" });
+    expect(refused.error).toMatch(/expected_md5/);
+    const preview = await invoke(vaultEdit, deps, { path: PATH, content: "x\n", dry_run: true });
+    expect(preview).toMatchObject({ dry_run: true, changed: true, md5: "md5-plan-0" });
+    expect(uploads(google)).toEqual([]);
+  });
+
+  it("requires exactly one of edits and content", async () => {
+    const { google, deps } = vaultSetup();
+    expect((await invoke(vaultEdit, deps, { path: PATH })).error).toMatch(/either edits or content/);
+    const both = await invoke(vaultEdit, deps, { path: PATH, edits: [{ old_text: "a", new_text: "b" }], content: "x", expected_md5: "m" });
+    expect(both.error).toMatch(/either edits or content/);
+    expect(google.calls).toEqual([]);
+  });
+
+  it("writes nothing when an edit fails, even if earlier edits matched", async () => {
+    const { google, deps } = vaultSetup();
+    const result = await invoke(vaultEdit, deps, {
+      path: PATH,
+      edits: [
+        { old_text: "- one", new_text: "- uno" },
+        { old_text: "missing", new_text: "x" },
+      ],
+    });
+    expect(result.error).toMatch(/Edit 2: old_text not found/);
+    expect(uploads(google)).toEqual([]);
+  });
+
+  it("does not upload when the edit changes nothing", async () => {
+    const { google, deps } = vaultSetup();
+    const result = await invoke(vaultEdit, deps, { path: PATH, edits: [{ old_text: "- one", new_text: "- one" }] });
+    expect(result).toMatchObject({ success: true, changed: false, diff: "" });
+    expect(uploads(google)).toEqual([]);
+  });
+
+  it("refuses to upload when the note changed while it was being read", async () => {
+    const { google, deps } = vaultSetup();
+    let downloads = 0;
+    google.override = (call) => {
+      if (call.query.alt === "media" && ++downloads === 1) {
+        const response = new Response(ORIGINAL);
+        google.touchDriveFile("plan", ORIGINAL + "phone edit\n");
+        return response;
+      }
+      return undefined;
+    };
+    const result = await invoke(vaultEdit, deps, { path: PATH, edits: [{ old_text: "- one", new_text: "- uno" }] });
+    expect(result.error).toMatch(/changed/);
+    expect(uploads(google)).toEqual([]);
+    expect(google.driveFile("plan")!.content).toContain("phone edit");
+  });
+
+  it("refuses the private folder without asking Drive anything", async () => {
+    const { google, deps } = vaultSetup();
+    google.addDriveFile({ id: "private", name: "90_Private", mimeType: FOLDER_MIME, parents: [ROOT] });
+    google.addDriveFile({ id: "ttc", name: "TTC.md", mimeType: "text/markdown", parents: ["private"], content: "PRIVATE-MARKER" });
+    for (const path of ["90_Private/TTC.md", "90_private/TTC.md"]) {
+      const result = await invoke(vaultEdit, deps, { path, edits: [{ old_text: "PRIVATE-MARKER", new_text: "x" }], dry_run: true });
+      expect(result.error).toMatch(/private/i);
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE-MARKER/);
+    }
+    expect(google.calls).toEqual([]);
+  });
+
+  it("refuses missing notes, duplicates, non-text files and oversized notes", async () => {
+    const { google, deps } = vaultSetup();
+    const edit = [{ old_text: "x", new_text: "y" }];
+    expect((await invoke(vaultEdit, deps, { path: "00_Inbox/Missing.md", edits: edit })).error).toMatch(/not found.*vault_find/s);
+    google.addDriveFile({ id: "plan-dup", name: "plan.md", mimeType: "text/markdown", parents: ["hermes"], content: "" });
+    expect((await invoke(vaultEdit, deps, { path: PATH, edits: edit })).error).toMatch(/2 files/);
+    google.addDriveFile({ id: "gdoc", name: "Doc.md", mimeType: "application/vnd.google-apps.document", parents: [ROOT] });
+    expect((await invoke(vaultEdit, deps, { path: "Doc.md", edits: edit })).error).toMatch(/not a plain-text/);
+    google.addDriveFile({ id: "big", name: "Big.md", mimeType: "text/markdown", parents: [ROOT], content: "x".repeat(1_000_001) });
+    expect((await invoke(vaultEdit, deps, { path: "Big.md", edits: edit })).error).toMatch(/too large/);
+    expect(uploads(google)).toEqual([]);
+  });
+
+  it("refuses a result over the size limit", async () => {
+    const { google, deps } = vaultSetup();
+    const result = await invoke(vaultEdit, deps, {
+      path: PATH,
+      edits: [{ old_text: "Some notes.", new_text: "y".repeat(20_000), replace_all: false }],
+      dry_run: true,
+    });
+    expect(result.dry_run).toBe(true);
+    google.addDriveFile({ id: "near", name: "Near.md", mimeType: "text/markdown", parents: [ROOT], content: "a".repeat(999_990) + "\nEND\n" });
+    const tooBig = await invoke(vaultEdit, deps, { path: "Near.md", edits: [{ old_text: "END", new_text: "z".repeat(100) }] });
+    expect(tooBig.error).toMatch(/too large/);
+    expect(uploads(google)).toEqual([]);
+  });
+
+  it("caps edit counts and text lengths in its schema", () => {
+    const edit = { old_text: "a", new_text: "b" };
+    expect(() => vaultEdit.inputSchema.parse({ path: "a.md", edits: Array(21).fill(edit) })).toThrow();
+    expect(() => vaultEdit.inputSchema.parse({ path: "a.md", edits: [{ old_text: "x".repeat(20_001), new_text: "" }] })).toThrow();
+    expect(() => vaultEdit.inputSchema.parse({ path: "a.md", content: "x".repeat(1_000_001), expected_md5: "m" })).toThrow();
+  });
+});
+
+describe("vault_read", () => {
+  const PATH = "01_Projects/Hermes/Plan.md";
+  const ORIGINAL = "# Plan\n\n## Tasks\n\n- one\n\n## Notes\n\nSome notes.\n";
+
+  it("is registered as a read-only tool", () => {
+    expect(TOOL_NAMES).toContain("vault_read");
+    expect(vaultRead.readOnly).toBe(true);
+  });
+
+  it("returns the note's exact text and md5, case-insensitively, without writing", async () => {
+    const { google, deps } = vaultSetup();
+    const result = await invoke(vaultRead, deps, { path: "01_projects/hermes/PLAN.md" });
+    expect(result).toMatchObject({ path: "01_projects/hermes/PLAN.md", file_id: "plan", md5: "md5-plan-0", content: ORIGINAL });
+    expect(google.calls.every((call) => call.method === "GET")).toBe(true);
+  });
+
+  it("returns an md5 that vault_edit accepts as expected_md5", async () => {
+    const { google, deps } = vaultSetup();
+    const read = await invoke(vaultRead, deps, { path: PATH });
+    const edit = await invoke(vaultEdit, deps, { path: PATH, content: read.content.replace("one", "uno"), expected_md5: read.md5 });
+    expect(edit.success).toBe(true);
+    expect(google.driveFile("plan")!.content).toBe(ORIGINAL.replace("one", "uno"));
+  });
+
+  it("refuses when the note changed while it was being read, so content and md5 always agree", async () => {
+    const { google, deps } = vaultSetup();
+    google.override = (call) => {
+      if (call.query.alt === "media") {
+        const response = new Response(ORIGINAL);
+        google.touchDriveFile("plan", ORIGINAL + "phone edit\n");
+        return response;
+      }
+      return undefined;
+    };
+    const result = await invoke(vaultRead, deps, { path: PATH });
+    expect(result.error).toMatch(/changed while it was being read/);
+    expect(result.content).toBeUndefined();
+  });
+
+  it("refuses the private folder without asking Drive anything", async () => {
+    const { google, deps } = vaultSetup();
+    google.addDriveFile({ id: "private", name: "90_Private", mimeType: FOLDER_MIME, parents: [ROOT] });
+    google.addDriveFile({ id: "ttc", name: "TTC.md", mimeType: "text/markdown", parents: ["private"], content: "PRIVATE-MARKER" });
+    for (const path of ["90_Private/TTC.md", "90_PRIVATE/TTC.md", "90_private (1)/TTC.md"]) {
+      const result = await invoke(vaultRead, deps, { path });
+      expect(result.error).toMatch(/private/i);
+      expect(JSON.stringify(result)).not.toMatch(/PRIVATE-MARKER/);
+    }
+    expect(google.calls).toEqual([]);
+  });
+
+  it("refuses missing notes, duplicates, non-text files and oversized notes without downloading", async () => {
+    const { google, deps } = vaultSetup();
+    expect((await invoke(vaultRead, deps, { path: "00_Inbox/Missing.md" })).error).toMatch(/not found.*vault_find/s);
+    google.addDriveFile({ id: "gdoc", name: "Doc.md", mimeType: "application/vnd.google-apps.document", parents: [ROOT] });
+    expect((await invoke(vaultRead, deps, { path: "Doc.md" })).error).toMatch(/not a plain-text/);
+    google.addDriveFile({ id: "big", name: "Big.md", mimeType: "text/markdown", parents: [ROOT], content: "x".repeat(1_000_001) });
+    expect((await invoke(vaultRead, deps, { path: "Big.md" })).error).toMatch(/too large/);
+    google.addDriveFile({ id: "plan-dup", name: "plan.md", mimeType: "text/markdown", parents: ["hermes"], content: "" });
+    expect((await invoke(vaultRead, deps, { path: PATH })).error).toMatch(/2 files/);
+    expect(google.calls.some((call) => call.query.alt === "media")).toBe(false);
+  });
+
+  it("errors when VAULT_FOLDER_ID is not configured", async () => {
+    const { google, deps } = vaultSetup(null);
+    expect((await invoke(vaultRead, deps, { path: PATH })).error).toMatch(/VAULT_FOLDER_ID/);
+    expect(google.calls).toEqual([]);
   });
 });

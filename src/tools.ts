@@ -8,7 +8,7 @@ import { z } from "zod";
 import { columnIndexToLetter, parseA1Notation, splitChartSourceRanges, type GridRange } from "./a1";
 import { errorMessage } from "./google/auth";
 import type { DriveFile, GoogleClient, SpreadsheetMetadata } from "./google/client";
-import { appendMarkdown, parseVaultPath, resolveVaultPath } from "./vault";
+import { appendMarkdown, editMarkdown, parseVaultPath, resolveVaultPath, unifiedDiff } from "./vault";
 
 export interface ToolDeps {
   google: GoogleClient;
@@ -713,6 +713,32 @@ function fileSummary(file: DriveFile) {
   return { id: file.id, name: file.name, mime_type: file.mimeType, modified_time: file.modifiedTime };
 }
 
+/**
+ * Resolve `path` to exactly one plain-text note within the size limit, or say
+ * why not. Shared by every vault tool that opens an existing note.
+ */
+async function openNote(
+  google: GoogleClient,
+  vaultFolderId: string,
+  path: string,
+): Promise<{ fileId: string; md5?: string; modifiedTime?: string; size: number } | { error: string }> {
+  const resolved = await resolveVaultPath(google, vaultFolderId, parseVaultPath(path));
+  if (resolved.matches.length === 0) {
+    return { error: `Note '${path}' not found. Use vault_find to check the path, then create the note instead.` };
+  }
+  if (resolved.matches.length > 1) {
+    return { error: `'${path}' matches ${resolved.matches.length} files (duplicates); ask the user to merge them first.` };
+  }
+  const fileId = resolved.matches[0].id;
+  const meta = await google.drive.filesGet(fileId, { fields: "id, name, mimeType, md5Checksum, size, modifiedTime" });
+  if (!meta.mimeType?.startsWith("text/")) {
+    return { error: `'${path}' is not a plain-text note (type ${meta.mimeType ?? "unknown"}); refusing to open it.` };
+  }
+  const size = Number(meta.size ?? 0);
+  if (size > MAX_NOTE_BYTES) return { error: `'${path}' is too large to handle safely (over ${MAX_NOTE_BYTES} bytes).` };
+  return { fileId, md5: meta.md5Checksum, modifiedTime: meta.modifiedTime, size };
+}
+
 export const vaultFind = defineTool({
   name: "vault_find",
   title: "Find Vault Note",
@@ -734,7 +760,7 @@ export const vaultFind = defineTool({
     if (resolved.matches.length > 1) {
       next_step = `This note exists ${resolved.matches.length} times (duplicates). Do not write to it; tell the user so they can merge the copies.`;
     } else if (exists) {
-      next_step = `The note exists. Add to it with vault_append (path '${path}'). Never create another file with this name.`;
+      next_step = `The note exists. Add to it with vault_append, or change existing text with vault_edit after reading it with vault_read (path '${path}'). Never create another file with this name.`;
     } else if (resolved.folderId) {
       next_step = `The note does not exist. Create it with the Google Drive create_file tool: title '${parsed.fileName}', parentId '${resolved.folderId}', contentMimeType 'text/markdown', disableConversionToGoogleType true.`;
     } else {
@@ -749,6 +775,30 @@ export const vaultFind = defineTool({
       missing_folders: resolved.missingFolders,
       next_step,
     };
+  },
+});
+
+export const vaultRead = defineTool({
+  name: "vault_read",
+  title: "Read Vault Note",
+  readOnly: true,
+  description:
+    "Read a Markdown note in the Obsidian vault exactly as stored, with its md5. Use it before vault_edit: copy old_text from this content (other readers may reformat text), and pass md5 as expected_md5 so the edit is refused if the note changed since. Refuses missing, duplicated, non-text or over-1 MB notes.",
+  inputSchema: z.object({ path: vaultPath }),
+  async handler({ google, vaultFolderId }, { path }) {
+    if (!vaultFolderId) return { error: VAULT_NOT_CONFIGURED };
+    try {
+      const note = await openNote(google, vaultFolderId, path);
+      if ("error" in note) return note;
+      const content = await google.drive.filesGetText(note.fileId);
+      const check = await google.drive.filesGet(note.fileId, { fields: "md5Checksum" });
+      if (check.md5Checksum !== note.md5) {
+        return { error: `'${path}' changed while it was being read (probably edited on another device); read it again.` };
+      }
+      return { path, file_id: note.fileId, md5: note.md5, size: note.size, modified_time: note.modifiedTime, content };
+    } catch (error) {
+      return { error: errorMessage(error) };
+    }
   },
 });
 
@@ -769,26 +819,13 @@ export const vaultAppend = defineTool({
   async handler({ google, vaultFolderId }, { path, text, under_heading }) {
     if (!vaultFolderId) return { error: VAULT_NOT_CONFIGURED };
     try {
-      const resolved = await resolveVaultPath(google, vaultFolderId, parseVaultPath(path));
-      if (resolved.matches.length === 0) {
-        return { error: `Note '${path}' not found. Use vault_find to check the path, then create the note instead.` };
-      }
-      if (resolved.matches.length > 1) {
-        return { error: `'${path}' matches ${resolved.matches.length} files (duplicates); ask the user to merge them first.` };
-      }
-      const fileId = resolved.matches[0].id;
-      const fields = "id, name, mimeType, md5Checksum, size, modifiedTime";
-      const before = await google.drive.filesGet(fileId, { fields });
-      if (!before.mimeType?.startsWith("text/")) {
-        return { error: `'${path}' is not a plain-text note (type ${before.mimeType ?? "unknown"}); refusing to modify it.` };
-      }
-      if (Number(before.size ?? 0) > MAX_NOTE_BYTES) {
-        return { error: `'${path}' is too large to update safely (over ${MAX_NOTE_BYTES} bytes).` };
-      }
+      const note = await openNote(google, vaultFolderId, path);
+      if ("error" in note) return note;
+      const fileId = note.fileId;
       const content = await google.drive.filesGetText(fileId);
       const updated = appendMarkdown(content, text, under_heading);
       const check = await google.drive.filesGet(fileId, { fields: "md5Checksum" });
-      if (check.md5Checksum !== before.md5Checksum) {
+      if (check.md5Checksum !== note.md5) {
         return { error: `'${path}' changed while it was being updated (probably edited on another device). Nothing was written; retry.` };
       }
       const result = await google.drive.filesUpdateMedia(fileId, updated, "text/markdown; charset=UTF-8", {
@@ -802,6 +839,84 @@ export const vaultAppend = defineTool({
         appended_chars: text.length,
         under_heading: under_heading ?? null,
       };
+    } catch (error) {
+      return { error: errorMessage(error) };
+    }
+  },
+});
+
+/** Longest diff returned to the client; longer ones are cut and flagged. */
+const MAX_DIFF_CHARS = 20_000;
+
+export const vaultEdit = defineTool({
+  name: "vault_edit",
+  title: "Edit Vault Note",
+  readOnly: false,
+  description:
+    "Change existing text in a Markdown note in the Obsidian vault, in place (same file, no copy). Read the note with vault_read first and copy old_text from it. Give either edits (find-and-replace pairs, applied in order; each old_text must match exactly once unless replace_all) or content (the whole new note, which requires expected_md5). All edits apply or none do. Set dry_run to get a unified diff and the note's md5 without writing; pass that md5 back as expected_md5 so the write is refused if the note changed after the preview. Refuses missing, duplicated, non-text or oversized notes, and notes changed while being updated. To only add text, use vault_append.",
+  inputSchema: z.object({
+    path: vaultPath,
+    edits: z
+      .array(
+        z.object({
+          old_text: z.string().max(20_000).describe("Exact text to find (max 20,000 characters)"),
+          new_text: z.string().max(20_000).describe("Replacement text; empty deletes old_text (max 20,000 characters)"),
+          replace_all: z.boolean().optional().describe("Replace every occurrence instead of requiring exactly one"),
+        }),
+      )
+      .min(1)
+      .max(20)
+      .optional()
+      .describe("Find-and-replace edits (1 to 20), applied in order"),
+    content: z.string().max(MAX_NOTE_BYTES).optional().describe("The whole new note, replacing the old one. Requires expected_md5."),
+    expected_md5: z
+      .string()
+      .optional()
+      .describe("The md5 from vault_read or a dry_run; the write is refused if the note's md5 differs"),
+    dry_run: z.boolean().default(false).describe("Return the diff without writing"),
+  }),
+  async handler({ google, vaultFolderId }, { path, edits, content, expected_md5, dry_run }) {
+    if ((edits === undefined) === (content === undefined)) {
+      return { error: "Give either edits or content, not both or neither." };
+    }
+    if (content !== undefined && !dry_run && !expected_md5) {
+      return { error: "Replacing the whole note needs expected_md5. Run vault_edit with dry_run first and pass back its md5." };
+    }
+    if (!vaultFolderId) return { error: VAULT_NOT_CONFIGURED };
+    try {
+      const note = await openNote(google, vaultFolderId, path);
+      if ("error" in note) return note;
+      const fileId = note.fileId;
+      if (expected_md5 && expected_md5 !== note.md5) {
+        return { error: `'${path}' has changed since expected_md5 was read. Nothing was written; preview again with dry_run.` };
+      }
+      const original = await google.drive.filesGetText(fileId);
+      const edited = editMarkdown(original, edits ?? { content: content! });
+      if (new TextEncoder().encode(edited.content).length > MAX_NOTE_BYTES) {
+        return { error: `The edited note would be too large (over ${MAX_NOTE_BYTES} bytes); nothing was written.` };
+      }
+      const fullDiff = unifiedDiff(original, edited.content, path);
+      const diff = fullDiff.length > MAX_DIFF_CHARS ? fullDiff.slice(0, MAX_DIFF_CHARS) : fullDiff;
+      const summary = {
+        path,
+        file_id: fileId,
+        mode: edits ? "edits" : "content",
+        replacements: edited.replacements,
+        changed: edited.content !== original,
+        diff,
+        ...(diff.length < fullDiff.length ? { diff_truncated: true } : {}),
+      };
+      if (dry_run) return { dry_run: true, md5: note.md5, ...summary };
+      if (!summary.changed) return { success: true, md5: note.md5, ...summary };
+
+      const check = await google.drive.filesGet(fileId, { fields: "md5Checksum" });
+      if (check.md5Checksum !== note.md5) {
+        return { error: `'${path}' changed while it was being updated (probably edited on another device). Nothing was written; retry.` };
+      }
+      const result = await google.drive.filesUpdateMedia(fileId, edited.content, "text/markdown; charset=UTF-8", {
+        fields: "id, modifiedTime, md5Checksum",
+      });
+      return { success: true, modified_time: result.modifiedTime, md5: result.md5Checksum, ...summary };
     } catch (error) {
       return { error: errorMessage(error) };
     }
@@ -848,6 +963,8 @@ export const TOOLS: ToolDefinition[] = [
   addChart,
   vaultFind,
   vaultAppend,
+  vaultEdit,
+  vaultRead,
 ];
 
 export const TOOL_NAMES: string[] = TOOLS.map((tool) => tool.name);

@@ -12,7 +12,7 @@
  *
  * The vault tools run only when GOOGLE_TEST_VAULT_FOLDER_ID is also set: a user-owned
  * folder, shared with the service account as editor, containing a user-created
- * `it-vault-note.md`. The test appends to that note and restores its content afterwards.
+ * `it-vault-note.md`. The test appends to, reads and edits that note, then restores its content.
  */
 import { env as workerEnv } from "cloudflare:workers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -41,7 +41,9 @@ import {
   TOOL_NAMES,
   updateCells,
   vaultAppend,
+  vaultEdit,
   vaultFind,
+  vaultRead,
   type ToolDefinition,
   type ToolDeps,
 } from "../src/tools";
@@ -70,7 +72,9 @@ const TOOLS_WITH_INTEGRATION_COVERAGE = [
   "share_spreadsheet",
   "update_cells",
   "vault_append",
+  "vault_edit",
   "vault_find",
+  "vault_read",
 ];
 
 /**
@@ -286,7 +290,7 @@ const vaultFolderId = env.GOOGLE_TEST_VAULT_FOLDER_ID ?? "";
 
 describe.skipIf(!enabled || !vaultFolderId)("live Google Drive vault integration", () => {
   it(
-    "finds, appends to, and restores a user-owned note",
+    "finds, appends to, reads, edits, and restores a user-owned note",
     async () => {
       const raw = env.GOOGLE_SERVICE_ACCOUNT_JSON || env.CREDENTIALS_CONFIG;
       if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON or CREDENTIALS_CONFIG is required");
@@ -304,6 +308,30 @@ describe.skipIf(!enabled || !vaultFolderId)("live Google Drive vault integration
         expect(appended.success, JSON.stringify(appended)).toBe(true);
         expect(appended.file_id).toBe(fileId);
         expect(await google.drive.filesGetText(fileId)).toContain(marker);
+
+        const read = await invoke(vaultRead, deps, { path: "it-vault-note.md" });
+        expect(read.file_id, JSON.stringify(read)).toBe(fileId);
+        expect(read.content).toContain(marker);
+
+        const edited = `it-edit-${Date.now()}`;
+        const preview = await invoke(vaultEdit, deps, {
+          path: "it-vault-note.md",
+          edits: [{ old_text: marker, new_text: edited }],
+          dry_run: true,
+        });
+        expect(preview.dry_run, JSON.stringify(preview)).toBe(true);
+        expect(preview.diff).toContain(`+${edited}`);
+        expect(preview.md5).toBe(read.md5);
+        const applied = await invoke(vaultEdit, deps, {
+          path: "it-vault-note.md",
+          edits: [{ old_text: marker, new_text: edited }],
+          expected_md5: preview.md5,
+        });
+        expect(applied.success, JSON.stringify(applied)).toBe(true);
+        expect(applied.file_id).toBe(fileId);
+        const afterEdit = await google.drive.filesGetText(fileId);
+        expect(afterEdit).toContain(edited);
+        expect(afterEdit).not.toContain(marker);
         const meta = await google.drive.filesGet(fileId, { fields: "mimeType" });
         expect(meta.mimeType).toMatch(/^text\//);
 
